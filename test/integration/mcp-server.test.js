@@ -174,6 +174,7 @@ test('in-process MCP server lists canonical tools and serves representative call
   }));
   assert.equal(metadata.data.document_uuid, 'doc-1');
   assert.equal(metadata.data.text_strategy, 'direct_or_ocr');
+  assert.equal(metadata.data.download_url, 'https://example/doc-1');
 
   const manifest = parseToolResult(await client.callTool({
     name: 'document_get_text_manifest',

@@ -15,6 +15,11 @@ test('document records map text_strategy from mime type or extension', () => {
   assert.equal(getDocumentTextStrategy({ mime_type: 'application/octet-stream', name: 'archive.bin' }), 'unsupported');
 });
 
+test('document records prefer explicit mime_type over conflicting file extension', () => {
+  assert.equal(getDocumentTextStrategy({ mime_type: 'image/png', name: 'scan.pdf' }), 'ocr');
+  assert.equal(getDocumentTextStrategy({ mime_type: 'image/jpeg', name: 'scan.pdf' }), 'ocr');
+});
+
 test('mapDocumentRecord normalizes document metadata with text_strategy', () => {
   const mapped = mapDocumentRecord({
     guid: 'doc-1',

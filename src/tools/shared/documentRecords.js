@@ -20,30 +20,53 @@ function resolveDocumentFormat(record) {
   const mimeType = normalizeMimeType(record.mime_type);
   const extension = getFileExtension(record.name || record.title || '');
 
-  if (mimeType === 'text/plain' || extension === '.txt' || extension === '.text') {
+  if (mimeType === 'text/plain') {
     return 'txt';
   }
 
   if (
     mimeType === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
-    || extension === '.docx'
   ) {
     return 'docx';
   }
 
-  if (mimeType === 'application/pdf' || extension === '.pdf') {
+  if (mimeType === 'application/pdf') {
     return 'pdf';
   }
 
-  if (mimeType === 'image/png' || extension === '.png') {
+  if (mimeType === 'image/png') {
     return 'image/png';
   }
 
-  if ((mimeType === 'image/jpeg' || mimeType === 'image/jpg') || extension === '.jpg' || extension === '.jpeg') {
+  if (mimeType === 'image/jpeg' || mimeType === 'image/jpg') {
     return 'image/jpeg';
   }
 
-  if (mimeType === 'image/webp' || extension === '.webp') {
+  if (mimeType === 'image/webp') {
+    return 'image/webp';
+  }
+
+  if (extension === '.txt' || extension === '.text') {
+    return 'txt';
+  }
+
+  if (extension === '.docx') {
+    return 'docx';
+  }
+
+  if (extension === '.pdf') {
+    return 'pdf';
+  }
+
+  if (extension === '.png') {
+    return 'image/png';
+  }
+
+  if (extension === '.jpg' || extension === '.jpeg') {
+    return 'image/jpeg';
+  }
+
+  if (extension === '.webp') {
     return 'image/webp';
   }
 

@@ -145,7 +145,7 @@ function createDocumentTools() {
       },
       budgetPolicy: {},
       handler: async ({ client, helpers, args }) => {
-        const { caseUuid, documentMetadata } = await resolveDocumentForArgs({
+        const { caseUuid, documentRecord, documentMetadata } = await resolveDocumentForArgs({
           client,
           helpers,
           args,
@@ -155,6 +155,7 @@ function createDocumentTools() {
           data: {
             case_uuid: caseUuid,
             ...documentMetadata,
+            download_url: documentRecord.download_url ?? null,
           },
           page: 1,
           pageSize: 1,

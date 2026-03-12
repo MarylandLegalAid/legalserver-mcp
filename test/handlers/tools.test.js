@@ -174,6 +174,7 @@ const successCases = [
       const result = parseSuccess(payload);
       assert.equal(result.data.document_uuid, 'doc-1');
       assert.equal(result.data.text_strategy, 'direct_or_ocr');
+      assert.equal(result.data.download_url, 'https://example/doc-1');
     },
   },
   {
