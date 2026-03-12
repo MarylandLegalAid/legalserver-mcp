@@ -4,7 +4,7 @@ const helpers = require('../../src/helpers');
 const { DocumentTextPipeline } = require('../../src/documentText');
 const { LegalServerClient } = require('../../src/legalserverClient');
 const { createToolRegistry } = require('../../src/toolRegistry');
-const { createSequentialFetch, jsonResponse, textResponse } = require('../support/mockFetch');
+const { binaryResponse, createSequentialFetch, jsonResponse, textResponse } = require('../support/mockFetch');
 
 const sampleDocuments = [
   {
@@ -347,6 +347,110 @@ test('document manifest propagates 503 failures from the LegalServer binary down
     (error) => {
       assert.equal(error.errorCode, 'service_unavailable');
       assert.equal(error.status, 503);
+      return true;
+    },
+  );
+});
+
+test('document manifest succeeds when document metadata has identifiers but no download_url', async () => {
+  const documents = [{
+    ...sampleDocuments[0],
+    download_url: null,
+  }];
+  const client = new LegalServerClient({
+    baseUrl: 'https://example.legalserver.org/',
+    bearerToken: 'token',
+    timeoutMs: 30000,
+    fetchImpl: createSequentialFetch([
+      jsonResponse(200, documents),
+      binaryResponse(200, Buffer.from('Recovered plain text', 'utf8'), {
+        'content-type': 'text/plain',
+        'content-disposition': 'attachment; filename="recovered.txt"',
+      }),
+    ], []),
+  });
+  const pipeline = new DocumentTextPipeline({
+    client,
+    config: {
+      documentOcrProvider: 'none',
+      documentOcrModel: 'gemini-2.5-flash',
+    },
+    extractors: {
+      async extractDocxText() {
+        return ['unused'];
+      },
+      async extractPdfTextPages() {
+        return ['unused'];
+      },
+      async splitPdfIntoSinglePageBuffers() {
+        return [];
+      },
+    },
+  });
+  const registry = createToolRegistry({ client, helpers, documentTextPipeline: pipeline });
+
+  const payload = await registry.execute('document_get_text_manifest', {
+    case_uuid: 'matter-uuid-1',
+    document_uuid: 'doc-1',
+  });
+
+  assert.equal(payload.ok, true);
+  assert.equal(payload.data.text_source, 'plain_text');
+  assert.equal(payload.data.total_text_chars, 'Recovered plain text'.length);
+});
+
+test('document manifest returns clean extraction errors when LegalServer download endpoints return HTML 404 pages', async () => {
+  const documents = [{
+    ...sampleDocuments[0],
+    download_url: 'https://evil.example.com/modules/document/download.php?id=501',
+  }];
+  const client = new LegalServerClient({
+    baseUrl: 'https://example.legalserver.org/',
+    bearerToken: 'token',
+    timeoutMs: 30000,
+    fetchImpl: createSequentialFetch([
+      jsonResponse(200, documents),
+      textResponse(404, '<!DOCTYPE html><html><body>missing uuid</body></html>', {
+        'content-type': 'text/html',
+      }),
+      textResponse(404, '<html><body>missing id</body></html>', {
+        'content-type': 'text/html',
+      }),
+    ], []),
+  });
+  const pipeline = new DocumentTextPipeline({
+    client,
+    config: {
+      documentOcrProvider: 'none',
+      documentOcrModel: 'gemini-2.5-flash',
+    },
+    extractors: {
+      async extractDocxText() {
+        return ['unused'];
+      },
+      async extractPdfTextPages() {
+        return ['unused'];
+      },
+      async splitPdfIntoSinglePageBuffers() {
+        return [];
+      },
+    },
+  });
+  const registry = createToolRegistry({ client, helpers, documentTextPipeline: pipeline });
+
+  await assert.rejects(
+    () => registry.execute('document_get_text_manifest', {
+      case_uuid: 'matter-uuid-1',
+      document_uuid: 'doc-1',
+    }),
+    (error) => {
+      assert.equal(error.errorCode, 'extraction_failed');
+      assert.equal(error.status, 502);
+      assert.equal(
+        error.message,
+        'LegalServer returned document metadata, but no retrievable allowlisted download URL was available for this document.',
+      );
+      assert.equal(error.message.includes('<html'), false);
       return true;
     },
   );

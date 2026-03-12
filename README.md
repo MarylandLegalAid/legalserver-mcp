@@ -1,8 +1,8 @@
 # LegalServer MCP Server
 
-`legalserver-mcp` is a read-only Model Context Protocol server for documented LegalServer v1 matter endpoints. Phase 2 keeps the existing `stdio` transport, CommonJS, and Node 20+, and adds document text extraction, chunk retrieval, and deterministic substring search.
+`legalserver-mcp` is a read-only Model Context Protocol server for documented LegalServer v1 matter endpoints. Phase 2.5 keeps the existing `stdio` transport, CommonJS, and Node 20+, and hardens phase 2 document retrieval with identifier-based download recovery, text extraction, chunk retrieval, and deterministic substring search.
 
-Version: `2.1.0`
+Version: `2.1.1`
 
 ## Requirements
 
@@ -88,6 +88,14 @@ Extraction rules:
 
 The server caches canonical text, chunk metadata, page offsets, and a SHA-256 text hash in memory for the lifetime of the process. It never caches raw document bytes.
 
+Phase 2.5 resolves document binaries from LegalServer document identifiers first:
+
+- same-origin `/modules/document/download.php?unique_id=<guid>`
+- same-origin `/modules/document/download.php?id=<internal_id>`
+- same-origin allowlisted `download_url` metadata only when present and valid
+
+`download_url` remains visible in `document_get_metadata`, but it is advisory metadata rather than a required internal dependency.
+
 Phase 2 intentionally does not expose:
 
 - raw file downloads
@@ -134,6 +142,8 @@ Phase 2 adds first-class internal error codes:
 - `document_too_large` (`413`)
 - `chunk_out_of_range` (`400`)
 - `extraction_failed` (`502`)
+
+When LegalServer returns a broken document endpoint, phase 2.5 now surfaces clean structured extraction errors instead of passing raw HTML error pages through tool responses.
 
 ## Search Semantics
 
@@ -192,10 +202,11 @@ npm test
 npm run smoke
 ```
 
-Manual phase 2 validation against a real LegalServer environment:
+Manual phase 2.5 validation against a real LegalServer environment:
 
 ```bash
 npm run manual:phase2 -- --case_uuid <matter-uuid> --document_uuid <doc-uuid> --query rent
 ```
 
 You can also use `--document_id` instead of `--document_uuid`. Run the manual script once on a digital PDF and once on a scanned PDF or supported image in an OCR-capable environment.
+The manual script exercises the identifier-first download path, so it remains valid even when `download_url` metadata is absent or stale.

@@ -52,6 +52,10 @@ Environment:
 Examples:
   npm run manual:phase2 -- --case_uuid matter-uuid --document_uuid doc-uuid --query rent
   npm run manual:phase2 -- --case_uuid matter-uuid --document_id 501 --query signature
+
+Notes:
+  Phase 2.5 resolves the document binary from document_uuid/document_id first.
+  download_url metadata is advisory and does not need to be present for this validation run.
 `);
 }
 

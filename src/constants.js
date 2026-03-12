@@ -1,4 +1,4 @@
-const SERVER_VERSION = '2.1.0';
+const SERVER_VERSION = '2.1.1';
 const DEFAULT_TIMEOUT_MS = 30000;
 const DEFAULT_PAGE = 1;
 const DEFAULT_PAGE_SIZE = 10;

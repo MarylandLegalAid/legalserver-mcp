@@ -16,12 +16,19 @@ function createPipeline(overrides = {}) {
     splitPdf: 0,
   };
   const client = {
-    async downloadBinary(url) {
-      downloads.push(url);
+    async downloadDocumentBinary(documentRecord) {
+      downloads.push({
+        guid: documentRecord.guid ?? null,
+        internal_id: documentRecord.internal_id ?? null,
+        download_url: documentRecord.download_url ?? null,
+      });
       return {
         buffer: Buffer.from('fixture text', 'utf8'),
         contentType: overrides.contentType || 'text/plain',
+        contentDisposition: overrides.contentDisposition || null,
         contentLength: 12,
+        filename: overrides.filename || null,
+        url: overrides.url || 'https://example.legalserver.org/modules/document/download.php?unique_id=fixture-doc',
       };
     },
   };
@@ -122,7 +129,29 @@ test('pipeline caches extraction results for repeated calls in one process', asy
   assert.equal(first.textSource, 'plain_text');
   assert.equal(second.textSha256, first.textSha256);
   assert.equal(downloads.length, 1);
+  assert.deepEqual(downloads[0], {
+    guid: 'doc-1',
+    internal_id: 500,
+    download_url: 'https://example.legalserver.org/modules/document/download.php?id=500',
+  });
   assert.deepEqual(extractorCalls, { docx: 0, pdf: 0, splitPdf: 0 });
+});
+
+test('pipeline extracts documents successfully with identifiers only and no download_url', async () => {
+  const { pipeline } = createPipeline();
+
+  const state = await pipeline.getDocumentState({
+    caseUuid: 'matter-1',
+    documentRecord: {
+      guid: 'doc-identifiers-only',
+      internal_id: 509,
+      name: 'notes.txt',
+      mime_type: 'text/plain',
+    },
+  });
+
+  assert.equal(state.textSource, 'plain_text');
+  assert.equal(state.totalTextChars, 'fixture text'.length);
 });
 
 test('pipeline extracts docx text through the injected extractor', async () => {
@@ -137,6 +166,27 @@ test('pipeline extracts docx text through the injected extractor', async () => {
       name: 'memo.docx',
       mime_type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
       download_url: 'https://example.legalserver.org/modules/document/download.php?id=501',
+    },
+  });
+
+  assert.equal(state.textSource, 'docx_text');
+  assert.equal(extractorCalls.docx, 1);
+});
+
+test('pipeline recovers document format from content-disposition when content-type is generic', async () => {
+  const { pipeline, extractorCalls } = createPipeline({
+    contentType: 'application/octet-stream',
+    contentDisposition: 'attachment; filename="fallback.docx"',
+    filename: 'fallback.docx',
+  });
+
+  const state = await pipeline.getDocumentState({
+    caseUuid: 'matter-1',
+    documentRecord: {
+      guid: 'doc-2b',
+      internal_id: 510,
+      name: 'mystery.bin',
+      mime_type: 'application/octet-stream',
     },
   });
 

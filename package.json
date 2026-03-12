@@ -1,7 +1,7 @@
 {
   "name": "legalserver-mcp",
-  "version": "2.1.0",
-  "description": "Read-only Model Context Protocol server for LegalServer v1 matter endpoints and phase 2 document intelligence",
+  "version": "2.1.1",
+  "description": "Read-only Model Context Protocol server for LegalServer v1 matter endpoints and phase 2.5 document download recovery",
   "main": "index.js",
   "scripts": {
     "start": "node index.js",

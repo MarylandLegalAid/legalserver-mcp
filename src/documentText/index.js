@@ -269,6 +269,16 @@ function sha256(value) {
   return crypto.createHash('sha256').update(value).digest('hex');
 }
 
+function resolveDownloadFormat({ documentRecord, download }) {
+  const normalizedContentType = normalizeMimeType(download.contentType);
+
+  return resolveDocumentFormat({ mime_type: normalizedContentType })
+    || resolveDocumentFormat({ name: download.filename })
+    || resolveDocumentFormat({ mime_type: documentRecord.mime_type })
+    || resolveDocumentFormat({ name: documentRecord.name })
+    || resolveDocumentFormat({ title: documentRecord.title });
+}
+
 class DocumentTextPipeline {
   constructor({ client, config, ocrProvider, extractors }) {
     this.client = client;
@@ -302,22 +312,11 @@ class DocumentTextPipeline {
 
   async buildDocumentState({ documentRecord }) {
     const expectedSizeBytes = getDocumentSizeBytes(documentRecord);
-    if (!documentRecord.download_url) {
-      throw new ToolError({
-        errorCode: 'extraction_failed',
-        message: 'Document metadata did not include a LegalServer download URL.',
-        status: 502,
-      });
-    }
-
-    const download = await this.client.downloadBinary(documentRecord.download_url, {
+    const download = await this.client.downloadDocumentBinary(documentRecord, {
       expectedSizeBytes,
     });
 
-    const format = resolveDocumentFormat({
-      ...documentRecord,
-      mime_type: normalizeMimeType(download.contentType) || documentRecord.mime_type,
-    });
+    const format = resolveDownloadFormat({ documentRecord, download });
 
     if (!format) {
       throw new ToolError({
