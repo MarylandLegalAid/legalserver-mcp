@@ -1,85 +1,154 @@
-# LegalServer MCP Server  
-*Work in Progress*
+# LegalServer MCP Server
 
-This repository contains a **Model Context Protocol (MCP) server** designed to integrate with **LibreChat** and provide tool-based access to your LegalServer case-management system.  
-It is an early-stage, actively evolving implementation intended to support legal-aid staff through structured, opinionated LegalServer queries.
+`legalserver-mcp` is a read-only Model Context Protocol server for documented LegalServer v1 matter endpoints. Phase 2 keeps the existing `stdio` transport, CommonJS, and Node 20+, and adds document text extraction, chunk retrieval, and deterministic substring search.
 
----
+Version: `2.1.0`
 
-## Current Tooling Provided (4 MCP Tools)
+## Requirements
 
-### **1. `search_case_by_number`**  
-Searches LegalServer for a matter using its **public case number** (e.g., `25-1234567`).  
-Returns identifying metadata—most importantly the **matter UUID** required by other tools.
+- Node `20+`
+- `LEGALSERVER_BASE_URL`
+- `LEGALSERVER_BEARER_TOKEN`
+- Optional: `LEGALSERVER_TIMEOUT_MS` (default `30000`)
+- Optional OCR:
+  - `DOCUMENT_OCR_PROVIDER=vertex_gemini`
+  - `DOCUMENT_OCR_MODEL` (default `gemini-2.5-flash`)
+  - `GOOGLE_CLOUD_PROJECT` required when OCR is enabled
+  - `GOOGLE_CLOUD_LOCATION` (default `global`)
 
-### **2. `get_case_info`**  
-Retrieves **various case details** for a given matter UUID, including:  
-- case title, numbers, status, and disposition  
-- client/contact information  
-- important dates  
-- intake data  
-- problem codes  
-- case notes
+Digital-text TXT, DOCX, and many PDFs work without OCR. Scanned PDFs and supported images fail explicitly with `error_code: "ocr_unavailable"` until OCR is configured.
 
-### **3. `list_case_documents`**  
-Returns all documents for a specific case, including:  
-- document GUID (preferred identifier)  
-- internal ID  
-- filenames, titles, MIME types  
-- file sizes and token-length estimates  
-- created/updated dates  
-
-### **4. `get_document`**  
-*Beta Feature*
-Retrieves text content from a LegalServer document.  
-Supports several modes:
-
-| Mode | Behavior |
-|------|----------|
-| **preview** | Returns first chunk (default) |
-| **chunk** | Returns a specific chunk index |
-| **search** | Returns snippets matching a search term |
-| **full** | Entire document (only if size is safe) |
-
-Supports `.txt`, `.pdf` (via `pdf-parse` v2), and `.docx`/`.doc` (via `mammoth`). Unsupported formats return structured errors.
-
----
-
-## Installation & Integration with LibreChat
-
-### **1. Create a custom-tools directory**
-
-Inside your LibreChat installation:
-
-```
-/librechat
-  /custom-tools
-    /legalserver-mcp
-      .env
-      index.js
-      package.json
-      README.md
-```
-
-Copy this repository into:
-
-```
-./custom-tools/legalserver-mcp/
-```
-
-Install dependencies:
-**Note:** pdf-parse v2 requires node 20+
+## Install
 
 ```bash
-cd custom-tools/legalserver-mcp
 npm install
 ```
 
----
+## Run
 
-### **2. Register the MCP server in `librechat.yaml`**
+```bash
+npm start
+```
 
-Add:
+Example environment:
+
+```bash
+LEGALSERVER_BASE_URL=https://your-site.legalserver.org/
+LEGALSERVER_BEARER_TOKEN=xxxxxxxx
+LEGALSERVER_TIMEOUT_MS=30000
+DOCUMENT_OCR_PROVIDER=none
+DOCUMENT_OCR_MODEL=gemini-2.5-flash
+GOOGLE_CLOUD_LOCATION=global
+```
+
+## Tool Set
+
+Phase 1 matter tools remain available:
+
+- `matter_lookup_by_case_number`
+- `matter_get`
+- `matter_list_notes`
+- `matter_get_note`
+- `matter_list_documents`
+- `document_get_metadata`
+- `matter_list_assignments`
+- `matter_list_adverse_parties`
+- `matter_list_non_adverse_parties`
+- `matter_list_contacts`
+- `matter_list_related_matters`
+- `matter_list_services`
+- `matter_list_incomes`
+- `matter_list_litigations`
+
+Phase 2 document intelligence tools:
+
+- `document_get_text_manifest`
+- `document_get_text_chunk`
+- `document_search_text`
+- `matter_search_document_text`
+
+All list/search tools default to `page=1` and `page_size=10`. `page_size` is capped at `25`.
+
+## Document Text Behavior
+
+`matter_list_documents` and `document_get_metadata` now include `text_strategy`:
+
+- `direct` for TXT and DOCX
+- `direct_or_ocr` for PDF
+- `ocr` for `image/png`, `image/jpeg`, and `image/webp`
+- `unsupported` for everything else
+
+Extraction rules:
+
+- TXT: UTF-8 decode and normalize
+- DOCX: `mammoth.extractRawText`
+- PDF: embedded text first, OCR fallback when normalized embedded text is under `100` non-whitespace chars
+- Images: OCR only for PNG, JPEG, and WebP
+- Max document size: `50 MB`
+
+The server caches canonical text, chunk metadata, page offsets, and a SHA-256 text hash in memory for the lifetime of the process. It never caches raw document bytes.
+
+Phase 2 intentionally does not expose:
+
+- raw file downloads
+- full-document text dumps
+- fuzzy search
+- semantic search
+- embeddings
+- any mutating LegalServer endpoint
+
+## Response Contract
+
+Success responses use one shared envelope:
+
+```json
+{
+  "ok": true,
+  "data": {},
+  "page": 1,
+  "page_size": 10,
+  "total_records": 1,
+  "total_pages": 1,
+  "truncated": false,
+  "warnings": [],
+  "next": null
+}
+```
+
+Errors keep the same shape and add:
+
+```json
+{
+  "ok": false,
+  "error_code": "unsupported_media_type",
+  "message": "This document type is not supported for phase 2 text extraction.",
+  "status": 415,
+  "retry_after": null
+}
+```
+
+Phase 2 adds first-class internal error codes:
+
+- `unsupported_media_type` (`415`)
+- `ocr_unavailable` (`412`)
+- `document_too_large` (`413`)
+- `chunk_out_of_range` (`400`)
+- `extraction_failed` (`502`)
+
+## Search Semantics
+
+- Case-insensitive exact substring search over canonical text
+- No stemming, fuzzy matching, embeddings, or ranking
+- Deterministic chunking: `4000` target chars with `400` chars overlap
+- Search snippets are capped at `600` chars
+- `matter_search_document_text` scans documents in this order:
+  - `date_updated DESC`
+  - `date_created DESC`
+  - `document_id ASC`
+
+If any document in scope requires OCR and OCR is unavailable or fails, the whole matter-wide search fails explicitly instead of returning partial results.
+
+## LibreChat `stdio` Example
 
 ```yaml
 mcpServers:
@@ -90,50 +159,43 @@ mcpServers:
     env:
       LEGALSERVER_BASE_URL: ${LEGALSERVER_BASE_URL}
       LEGALSERVER_BEARER_TOKEN: ${LEGALSERVER_BEARER_TOKEN}
-    description: "Tools for interacting with Legalserver case management"
+      LEGALSERVER_TIMEOUT_MS: ${LEGALSERVER_TIMEOUT_MS}
+      DOCUMENT_OCR_PROVIDER: ${DOCUMENT_OCR_PROVIDER}
+      DOCUMENT_OCR_MODEL: ${DOCUMENT_OCR_MODEL}
+      GOOGLE_CLOUD_PROJECT: ${GOOGLE_CLOUD_PROJECT}
+      GOOGLE_CLOUD_LOCATION: ${GOOGLE_CLOUD_LOCATION}
+    description: "Read-only LegalServer matter and document intelligence tools"
     chatMenu: true
 ```
 
-Set required environment variables:
+## Sample Document Review Agent
 
+Use only these tools:
+
+- `matter_lookup_by_case_number`
+- `matter_list_documents`
+- `document_get_metadata`
+- `document_get_text_manifest`
+- `document_get_text_chunk`
+- `document_search_text`
+
+Example server instructions:
+
+> When the user gives a LegalServer case number, resolve it first. Review only the documents needed for the request. Use `document_get_text_manifest` to understand size and extraction source, retrieve only the required chunks with `document_get_text_chunk`, and prefer `document_search_text` for pinpointed quotes or clause lookup. Do not ask for or expect full-document text dumps.
+
+## Validation
+
+Automated validation:
+
+```bash
+npm test
+npm run smoke
 ```
-LEGALSERVER_BASE_URL=https://your-site.legalserver.org/
-LEGALSERVER_BEARER_TOKEN=xxxxxxxx
+
+Manual phase 2 validation against a real LegalServer environment:
+
+```bash
+npm run manual:phase2 -- --case_uuid <matter-uuid> --document_uuid <doc-uuid> --query rent
 ```
 
-Restart LibreChat.
-
----
-
-## Reference Documentation
-
-LibreChat MCP server documentation:  
-https://www.librechat.ai/docs/configuration/librechat_yaml/object_structure/mcp_servers
-
----
-
-## Example Use Case: LS Case Summarizer Agent
-
-Create a LibreChat agent configured with these tools:
-
-- `search_case_by_number`
-- `get_case_info`
-- `list_case_documents`
-
-**Agent instructions example:**
-
-> When provided a LegalServer case number (e.g., “24-0539721”), use the legalserver tools to search for that case and get information about it, including its documents.  
-> If the user does not provide a LegalServer case number, prompt them to provide one.  
-> Then provide a summary of what the case is about in a timeline format.
-
-### **Example Workflow**
-
-1. User asks:  
-   `Please summarize case 24-0539721`
-
-2. Agent performs:
-   - `search_case_by_number` → obtains matter UUID  
-   - `get_case_info` → retrieves case metadata and notes  
-   - `list_case_documents` → optionally reviews document list  
-
-3. Agent outputs a structured **timeline summary** of the case.
+You can also use `--document_id` instead of `--document_uuid`. Run the manual script once on a digital PDF and once on a scanned PDF or supported image in an OCR-capable environment.
