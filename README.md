@@ -1,8 +1,8 @@
 # LegalServer MCP Server
 
-`legalserver-mcp` is a read-only Model Context Protocol server for documented LegalServer v1 matter endpoints. Phase 2.5 keeps the existing `stdio` transport, CommonJS, and Node 20+, and hardens phase 2 document retrieval with identifier-based download recovery, text extraction, chunk retrieval, and deterministic substring search.
+`legalserver-mcp` is a read-only Model Context Protocol server for documented LegalServer v1 matter, document, and phase 3 global discovery endpoints. Phase 3 keeps the existing `stdio` transport, CommonJS, and Node 20+, and adds cross-matter discovery for tasks, events, contacts, users, and organizations on top of the phase 2.5 document pipeline.
 
-Version: `2.1.1`
+Version: `2.2.0`
 
 ## Requirements
 
@@ -72,7 +72,27 @@ Phase 2 document intelligence tools:
 - `document_search_text`
 - `matter_search_document_text`
 
+Phase 3 global discovery tools:
+
+- `task_search`
+- `task_get`
+- `task_list_on_date`
+- `event_search`
+- `event_get`
+- `event_list_by_date`
+- `contact_search`
+- `contact_get`
+- `contact_lookup_by_email`
+- `user_search`
+- `user_get`
+- `user_lookup_by_login`
+- `organization_search`
+- `organization_get`
+- `organization_lookup_by_name`
+
 All list/search tools default to `page=1` and `page_size=10`. `page_size` is capped at `25`.
+Exact-match convenience lookups return `404 not_found` when no exact match exists and `409 multiple_matches` when more than one exact match is found.
+Some LegalServer tenants reject the documented `/api/v1/events?date=...` filter. When that happens, `event_search` and `event_list_by_date` fall back to a bounded local date filter over descending event pages and emit warnings describing the scanned window.
 
 ## Document Text Behavior
 
@@ -112,6 +132,12 @@ Phase 2 intentionally does not expose:
 - embeddings
 - any mutating LegalServer endpoint
 
+Phase 3 also intentionally does not expose:
+
+- implicit current-user shortcuts
+- raw `custom_fields`
+- raw sort passthroughs
+
 ## Response Contract
 
 Success responses use one shared envelope:
@@ -142,13 +168,14 @@ Errors keep the same shape and add:
 }
 ```
 
-Phase 2 adds first-class internal error codes:
+First-class internal error codes:
 
 - `unsupported_media_type` (`415`)
 - `ocr_unavailable` (`412`)
 - `document_too_large` (`413`)
 - `chunk_out_of_range` (`400`)
 - `extraction_failed` (`502`)
+- `multiple_matches` (`409`)
 
 When LegalServer returns a broken document endpoint, phase 2.5 now surfaces clean structured extraction errors instead of passing raw HTML error pages through tool responses.
 
@@ -164,6 +191,7 @@ When LegalServer returns a broken document endpoint, phase 2.5 now surfaces clea
   - `document_id ASC`
 
 `matter_search_document_text` now returns partial success when some documents cannot be searched. Unsupported, OCR-blocked, oversized, and broken-download documents are skipped and summarized in `warnings`.
+`event_search` and `event_list_by_date` prefer LegalServer's native `date` filter when the tenant supports it. If the API returns `invalid_search_keys=date`, the server retries without that key, scans descending event pages, filters by the event's local start/end date, and marks the response with warnings. When the scan hits its `20`-page safety cap, `truncated=true` and pagination counts reflect the scanned window only.
 
 ## LibreChat `stdio` Example
 
@@ -181,7 +209,7 @@ mcpServers:
       DOCUMENT_OCR_MODEL: ${DOCUMENT_OCR_MODEL}
       GOOGLE_CLOUD_PROJECT: ${GOOGLE_CLOUD_PROJECT}
       GOOGLE_CLOUD_LOCATION: ${GOOGLE_CLOUD_LOCATION}
-    description: "Read-only LegalServer matter and document intelligence tools"
+    description: "Read-only LegalServer matter, document, and operations-discovery tools"
     chatMenu: true
 ```
 
@@ -200,6 +228,20 @@ Example server instructions:
 
 > When the user gives a LegalServer case number, resolve it first. Review only the documents needed for the request. Use `document_get_text_manifest` to understand size and extraction source, retrieve only the required chunks with `document_get_text_chunk`, and prefer `document_search_text` for pinpointed quotes or clause lookup. Do not ask for or expect full-document text dumps.
 
+## Sample Operations Agent
+
+Use only these tools:
+
+- `task_list_on_date`
+- `event_list_by_date`
+- `contact_lookup_by_email`
+- `user_lookup_by_login`
+- `organization_lookup_by_name`
+
+Example server instructions:
+
+> Use the exact-match lookup tools first when the user provides a contact email, user login, or organization name. For workload and calendar questions, prefer `task_list_on_date` and `event_list_by_date` before broader search tools. Do not assume anything about the caller's identity; the server runs on a shared read-only credential.
+
 ## Validation
 
 Automated validation:
@@ -217,3 +259,11 @@ npm run manual:phase2 -- --case_uuid <matter-uuid> --document_uuid <doc-uuid> --
 
 You can also use `--document_id` instead of `--document_uuid`. Run the manual script once on a digital PDF and once on a scanned PDF or supported image in an OCR-capable environment.
 The manual script exercises the identifier-first download path, so it remains valid even when `download_url` metadata is absent or stale.
+
+Manual phase 3 validation against a real LegalServer environment:
+
+```bash
+npm run manual:phase3 -- --contact_email <email> --user_login <login> --organization_name "<org>" --task_date <yyyy-mm-dd> --event_date <yyyy-mm-dd>
+```
+
+If the target tenant rejects the documented event `date` search key, the manual script will still succeed via the bounded fallback path and will print the emitted warnings.

@@ -11,6 +11,15 @@ function normalizeIdentifier(value, fieldName) {
   return normalized;
 }
 
+function normalizeOptionalIdentifier(value) {
+  if (value === undefined || value === null) {
+    return null;
+  }
+
+  const normalized = String(value).trim();
+  return normalized || null;
+}
+
 function getFirstDefined(...values) {
   for (const value of values) {
     if (value !== undefined && value !== null && value !== '') {
@@ -104,6 +113,15 @@ function normalizeDisplayName(record) {
   );
 }
 
+function validateIsoDate(value, fieldName) {
+  const normalized = normalizeIdentifier(value, fieldName);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(normalized)) {
+    throw new Error(`${fieldName} must be an ISO date in YYYY-MM-DD format`);
+  }
+
+  return normalized;
+}
+
 module.exports = {
   getFirstDefined,
   normalizeArrayValue,
@@ -111,6 +129,8 @@ module.exports = {
   normalizeDateValue,
   normalizeDisplayName,
   normalizeIdentifier,
+  normalizeOptionalIdentifier,
   normalizeOffice,
   normalizeUser,
+  validateIsoDate,
 };

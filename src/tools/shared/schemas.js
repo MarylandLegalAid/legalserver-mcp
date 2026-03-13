@@ -29,7 +29,24 @@ function pageProperties() {
   };
 }
 
+function uuidProperty(description) {
+  return {
+    type: 'string',
+    description,
+  };
+}
+
+function isoDateProperty(description) {
+  return {
+    type: 'string',
+    description,
+    pattern: '^\\d{4}-\\d{2}-\\d{2}$',
+  };
+}
+
 module.exports = {
   caseUuidProperty,
+  isoDateProperty,
   pageProperties,
+  uuidProperty,
 };

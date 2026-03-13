@@ -25,8 +25,13 @@ test('only the dedicated LegalServer binary download helper references the docum
     path.join(root, 'src', 'config.js'),
     path.join(root, 'src', 'mcpServer.js'),
     path.join(root, 'src', 'toolRegistry.js'),
+    path.join(root, 'src', 'tools', 'contacts.js'),
     path.join(root, 'src', 'tools', 'documents.js'),
+    path.join(root, 'src', 'tools', 'events.js'),
     path.join(root, 'src', 'tools', 'matters.js'),
+    path.join(root, 'src', 'tools', 'organizations.js'),
+    path.join(root, 'src', 'tools', 'tasks.js'),
+    path.join(root, 'src', 'tools', 'users.js'),
   ];
 
   for (const filePath of filesToScan) {

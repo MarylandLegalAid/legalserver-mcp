@@ -6,8 +6,10 @@ const {
   normalizeDateValue,
   normalizeDisplayName,
   normalizeIdentifier,
+  normalizeOptionalIdentifier,
   normalizeOffice,
   normalizeUser,
+  validateIsoDate,
 } = require('./identifiers');
 const {
   buildNextPage,
@@ -31,6 +33,7 @@ module.exports = {
   normalizeDateValue,
   normalizeDisplayName,
   normalizeIdentifier,
+  normalizeOptionalIdentifier,
   normalizeOffice,
   normalizeUser,
   paginateArray,
@@ -39,6 +42,7 @@ module.exports = {
   toErrorEnvelope,
   toMcpTextResult,
   truncateText,
+  validateIsoDate,
   validateMaxChars,
   validatePage,
   validatePageSize,

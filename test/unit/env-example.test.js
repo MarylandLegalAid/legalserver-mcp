@@ -14,4 +14,9 @@ test('.env.example exposes phase 2 OCR configuration', () => {
   assert.match(envExample, /^GOOGLE_CLOUD_PROJECT=/m);
   assert.match(envExample, /^GOOGLE_CLOUD_LOCATION=/m);
   assert.match(envExample, /^GOOGLE_APPLICATION_CREDENTIALS=/m);
+  assert.match(envExample, /^PHASE3_CONTACT_EMAIL=/m);
+  assert.match(envExample, /^PHASE3_USER_LOGIN=/m);
+  assert.match(envExample, /^PHASE3_ORGANIZATION_NAME=/m);
+  assert.match(envExample, /^PHASE3_TASK_DATE=/m);
+  assert.match(envExample, /^PHASE3_EVENT_DATE=/m);
 });

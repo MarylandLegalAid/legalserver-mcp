@@ -1,4 +1,4 @@
-const SERVER_VERSION = '2.1.1';
+const SERVER_VERSION = '2.2.0';
 const DEFAULT_TIMEOUT_MS = 30000;
 const DEFAULT_PAGE = 1;
 const DEFAULT_PAGE_SIZE = 10;
@@ -6,6 +6,7 @@ const MAX_PAGE_SIZE = 25;
 const DEFAULT_MAX_CHARS = 6000;
 const MAX_MAX_CHARS = 12000;
 const PREVIEW_MAX_CHARS = 300;
+const EVENT_DATE_FALLBACK_MAX_PAGES = 20;
 const MAX_DOCUMENT_BYTES = 50 * 1024 * 1024;
 const DOCUMENT_CHUNK_TARGET_CHARS = 4000;
 const DOCUMENT_CHUNK_OVERLAP_CHARS = 400;
@@ -27,6 +28,16 @@ const READ_ONLY_ENDPOINTS = new Set([
   '/api/v1/matters/{case_UUID}/services',
   '/api/v1/matters/{case_UUID}/incomes',
   '/api/v1/matters/{case_UUID}/litigations',
+  '/api/v1/tasks',
+  '/api/v1/tasks/{task_uuid}',
+  '/api/v1/events',
+  '/api/v1/events/{event_uuid}',
+  '/api/v1/contacts',
+  '/api/v1/contacts/{contact_UUID}',
+  '/api/v1/users',
+  '/api/v1/users/{user_uuid}',
+  '/api/v1/organizations',
+  '/api/v1/organizations/{organization_uuid}',
 ]);
 
 const CANONICAL_TOOL_NAMES = [
@@ -48,6 +59,21 @@ const CANONICAL_TOOL_NAMES = [
   'matter_list_services',
   'matter_list_incomes',
   'matter_list_litigations',
+  'task_search',
+  'task_get',
+  'task_list_on_date',
+  'event_search',
+  'event_get',
+  'event_list_by_date',
+  'contact_search',
+  'contact_get',
+  'contact_lookup_by_email',
+  'user_search',
+  'user_get',
+  'user_lookup_by_login',
+  'organization_search',
+  'organization_get',
+  'organization_lookup_by_name',
 ];
 
 module.exports = {
@@ -56,6 +82,7 @@ module.exports = {
   DEFAULT_PAGE,
   DEFAULT_PAGE_SIZE,
   DEFAULT_TIMEOUT_MS,
+  EVENT_DATE_FALLBACK_MAX_PAGES,
   DOCUMENT_CHUNK_BOUNDARY_LOOKBACK_CHARS,
   DOCUMENT_CHUNK_OVERLAP_CHARS,
   DOCUMENT_CHUNK_TARGET_CHARS,

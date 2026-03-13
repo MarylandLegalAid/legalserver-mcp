@@ -1,11 +1,13 @@
 # Phase 2 Spec: Document Intelligence for LegalServer MCP
 
+Status note: this spec has been updated to reflect the document-intelligence follow-up that is already implemented in the repo after case `487695`, including first-pass `.rtf` / `.eml` support and partial-success `matter_search_document_text` warnings.
+
 ## Summary
 
 - Extend phase 1 with document text extraction, chunk retrieval, and text search while keeping the server stateless, CommonJS, Node 20+, and `stdio`.
 - Add `document_get_text_manifest`, `document_get_text_chunk`, `document_search_text`, and `matter_search_document_text`.
 - Keep all phase 1 tools, but add a `text_strategy` hint to `matter_list_documents` and `document_get_metadata`.
-- Use embedded-text extraction first and OCR only when needed. Cache normalized text and chunk tables per document in memory for the life of the process. Do not add a full-document text dump tool.
+- Use embedded-text extraction first and OCR only when needed. Cache normalized text and chunk tables per document in memory for the life of the process. Support first-pass `.rtf` and `.eml` extraction in the same core pipeline. Do not add a full-document text dump tool.
 
 ## Implementation Changes
 
@@ -17,6 +19,8 @@
 - Add extractors:
   - TXT: UTF-8 decode and normalize.
   - DOCX: `mammoth.extractRawText`.
+  - RTF: plain-text conversion with paragraph preservation where possible.
+  - EML: RFC822-style header/body extraction, `text/plain` preferred, HTML converted to plain text, no attachment extraction in phase 2.
   - PDF: try embedded text first (`pdf-parse`). If normalized non-whitespace text is under `100` chars, treat it as OCR-needed and split it into single-page PDFs with `pdf-lib`.
   - Images: OCR only for `image/png`, `image/jpeg`, and `image/webp`.
   - Everything else: fail with `unsupported_media_type`.
@@ -25,19 +29,19 @@
 - Canonical text normalization: convert line endings to `\n`, strip control chars except newline, trim trailing spaces, collapse repeated spaces/tabs inside lines, and collapse `3+` blank lines to `2`. Preserve page boundaries in a page-offset map.
 - Deterministic chunking: `chunk_index` is 0-based, `chunk_target_chars=4000`, `chunk_overlap_chars=400`, prefer the last paragraph/newline boundary within `500` chars before the limit, otherwise hard split. Chunking happens once from cached canonical text.
 - Search behavior: case-insensitive exact substring search over canonical text. No fuzzy search, stemming, embeddings, or relevance ranking in phase 2. Merge overlapping hit windows and sort hits by document order then `start_char`.
-- `matter_search_document_text` scans all matter documents in deterministic order: `date_updated DESC`, then `date_created DESC`, then `document_id ASC`. If any document in scope requires OCR and OCR is unavailable or fails, the whole call fails explicitly rather than returning partial results.
+- `matter_search_document_text` scans all matter documents in deterministic order: `date_updated DESC`, then `date_created DESC`, then `document_id ASC`. Keep single-document tools strict, but let matter-wide search return partial success with deterministic `warnings` when documents fail with `unsupported_media_type`, `ocr_unavailable`, `extraction_failed`, or `document_too_large`.
 - Update README and package metadata for phase 2, including env vars, new tools, limitations, and a document-review agent example. Add a manual validation script and npm entry such as `npm run manual:phase2` for real-environment verification.
 
 ## Public Interfaces
 
 - `matter_list_documents` and `document_get_metadata` add `text_strategy`:
-  - `direct` for TXT/DOCX
+  - `direct` for TXT/DOCX/RTF/EML
   - `direct_or_ocr` for PDF
   - `ocr` for supported images
   - `unsupported` otherwise
 - `document_get_text_manifest(case_uuid, document_uuid|document_id)` returns:
   - `case_uuid`, `document_uuid`, `document_id`, `name`, `title`, `mime_type`, `size_bytes`
-  - `text_source` in `plain_text | docx_text | pdf_text | pdf_ocr | image_ocr`
+  - `text_source` in `plain_text | docx_text | rtf_text | email_text | pdf_text | pdf_ocr | image_ocr`
   - `ocr_provider`, `ocr_model`, `page_count`, `total_text_chars`, `estimated_tokens`, `chunk_count`
   - `chunk_target_chars`, `chunk_overlap_chars`, `first_chunk_index`, `last_chunk_index`, `text_sha256`
   - If extraction succeeds but yields no text, return success with `chunk_count=0`, null first/last chunk, and a warning.
@@ -50,21 +54,24 @@
   - `query` must trim to at least 2 chars; `page_size` max stays `25`; snippet max length is `600`.
 - `matter_search_document_text(case_uuid, query, page=1, page_size=10)` returns the same hit shape plus:
   - `document_uuid`, `document_id`, `name`, `title`, `mime_type`, `date_updated`
+  - Search remains a normal success envelope when some documents are skipped; skipped counts and sample document labels are summarized in `warnings`.
 - Add a first-class internal tool error type so phase 2 can emit `unsupported_media_type` (`415`), `ocr_unavailable` (`412`), `document_too_large` (`413`), `chunk_out_of_range` (`400`), and `extraction_failed` (`502`) without collapsing to generic `invalid_request`.
 - Search with no matches is a normal success envelope with empty `data`.
 
 ## Test Plan
 
 - Unit tests for MIME/extension-to-`text_strategy` mapping, same-origin binary download validation, OCR env validation, canonical text normalization, deterministic chunk building, search hit merging, empty-text manifests, and new internal error envelopes.
-- Pipeline tests with local fixtures for TXT, DOCX, digital PDF, scanned PDF that forces OCR fallback, supported image OCR, oversized document rejection, unsupported MIME, and repeated manifest/chunk/search calls proving one download/extraction per document per process.
+- Pipeline tests with local fixtures for TXT, DOCX, RTF, EML, digital PDF, scanned PDF that forces OCR fallback, supported image OCR, oversized document rejection, unsupported MIME, and repeated manifest/chunk/search calls proving one download/extraction per document per process.
 - Handler tests for every new tool with mocked LegalServer responses and a stub OCR provider. Cover success, empty search, `404` document lookup miss, `ocr_unavailable`, `unsupported_media_type`, `chunk_out_of_range`, `429/503` from LegalServer download, and OCR provider failure.
 - Integration tests update `list_tools`, verify phase 1 tools still work, and execute representative phase 2 calls end-to-end in-process with mocked fetch plus a fake pipeline/OCR provider.
 - Regression tests replace the phase 1 “no download endpoint anywhere” assertion with a narrower rule: only the dedicated binary download helper may reference `/modules/document/download.php`.
+- Regression tests cover partial-success `matter_search_document_text` warnings for unsupported, OCR-blocked, oversized, and broken-download documents.
 - Ship checklist:
   - `npm test` passes
   - `npm run smoke` still verifies tool advertisement without contacting LegalServer
   - the manual phase 2 runbook/script succeeds once on a digital PDF and once on a scanned PDF or image in an OCR-capable environment
-  - README documents phase 2 env vars, tool contracts, `text_strategy`, OCR limitations, and a sample document-review agent tool subset
+  - manual validation also covers one `.rtf` and one `.eml` document when available
+  - README documents phase 2 env vars, tool contracts, `text_strategy`, OCR limitations, partial-success matter-wide warnings, and a sample document-review agent tool subset
 
 ## Assumptions And Defaults
 
@@ -73,4 +80,5 @@
 - OCR is optional at startup. Digital-text documents work without OCR. Documents that require OCR fail explicitly until `DOCUMENT_OCR_PROVIDER=vertex_gemini` and ADC-backed Google env vars are available.
 - Use Vertex AI through `@google/genai` with ADC and `apiVersion: "v1"`; default model is `gemini-2.5-flash` unless overridden by `DOCUMENT_OCR_MODEL`.
 - Maximum document size is `50 MB`. If LegalServer metadata omits size, enforce the cap on the downloaded buffer.
-- Phase 2 still does not expose raw file downloads, full-document text dumps, fuzzy search, semantic search, or any mutating LegalServer endpoint.
+- Matter-wide search may skip unsupported, OCR-blocked, oversized, or broken documents and report them in `warnings`, but single-document tools remain fail-fast.
+- Phase 2 still does not expose raw file downloads, full-document text dumps, fuzzy search, semantic search, attachment extraction from email, or any mutating LegalServer endpoint.

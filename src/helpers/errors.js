@@ -1,10 +1,11 @@
 class ToolError extends Error {
-  constructor({ errorCode, message, retryAfter, status }) {
+  constructor({ errorCode, message, retryAfter, status, details }) {
     super(message);
     this.name = 'ToolError';
     this.errorCode = errorCode;
     this.retryAfter = retryAfter ?? null;
     this.status = status ?? 500;
+    this.details = details ?? null;
   }
 }
 
@@ -46,6 +47,10 @@ function extractErrorMessage(payload, fallback) {
     return payload.detail;
   }
 
+  if (typeof payload.error_message === 'string' && payload.error_message.trim()) {
+    return payload.error_message;
+  }
+
   const detailParts = [];
 
   if (Array.isArray(payload.missing_arguments) && payload.missing_arguments.length > 0) {
@@ -54,6 +59,10 @@ function extractErrorMessage(payload, fallback) {
 
   if (Array.isArray(payload.invalid_parameters) && payload.invalid_parameters.length > 0) {
     detailParts.push(`invalid_parameters=${payload.invalid_parameters.join(', ')}`);
+  }
+
+  if (Array.isArray(payload.invalid_search_keys) && payload.invalid_search_keys.length > 0) {
+    detailParts.push(`invalid_search_keys=${payload.invalid_search_keys.join(', ')}`);
   }
 
   if (payload.invalid_values && typeof payload.invalid_values === 'object') {
@@ -90,6 +99,7 @@ async function parseLegalServerError(response) {
     message: extractErrorMessage(payload, fallback),
     retryAfter,
     status: response.status,
+    details: payload && typeof payload === 'object' ? payload : null,
   });
 }
 

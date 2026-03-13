@@ -116,7 +116,7 @@ test('client builds allowlisted GET URLs with query params', async () => {
 
 test('client rejects non-allowlisted endpoints', async () => {
   const client = createClient(async () => jsonResponse(200, {}));
-  await assert.rejects(() => client.getJson('/api/v1/tasks'), /not allowlisted/);
+  await assert.rejects(() => client.getJson('/api/v1/timekeeping'), /not allowlisted/);
 });
 
 test('client maps LegalServer errors including retry-after', async () => {
@@ -151,6 +151,23 @@ test('client parses text error bodies', async () => {
 
   assert.ok(error);
   assert.equal(error.message, 'Temporary outage');
+});
+
+test('client surfaces invalid_search_keys details from LegalServer error payloads', async () => {
+  const client = createClient(createSequentialFetch([
+    jsonResponse(400, { invalid_search_keys: ['date'] }),
+  ], []));
+
+  let error;
+  try {
+    await client.getJson('/api/v1/events');
+  } catch (caughtError) {
+    error = caughtError;
+  }
+
+  assert.ok(error);
+  assert.equal(error.message, 'invalid_search_keys=date');
+  assert.deepEqual(error.details, { invalid_search_keys: ['date'] });
 });
 
 test('client validates same-origin document download URLs', async () => {
