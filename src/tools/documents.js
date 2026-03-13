@@ -13,6 +13,13 @@ const {
 } = require('./shared/documentRecords');
 const { caseUuidProperty, pageProperties } = require('./shared/schemas');
 
+const MATTER_SEARCH_SKIPPABLE_ERROR_CODES = new Set([
+  'document_too_large',
+  'extraction_failed',
+  'ocr_unavailable',
+  'unsupported_media_type',
+]);
+
 function documentIdentifierProperties() {
   return {
     document_uuid: {
@@ -93,7 +100,49 @@ function paginateItems({ helpers, items, page, pageSize }) {
     totalRecords: paged.totalRecords,
     totalPages: paged.totalPages,
     truncated: false,
+    warnings: [],
   });
+}
+
+function buildSkippedDocumentLabel(metadata) {
+  const identifier = metadata.document_id ?? metadata.document_uuid ?? 'unknown';
+  const name = metadata.name || metadata.title || 'unnamed document';
+  return `${identifier}: ${name}`;
+}
+
+function buildMatterSearchWarnings(skippedDocuments) {
+  if (skippedDocuments.length === 0) {
+    return [];
+  }
+
+  const summaryByCode = new Map();
+
+  for (const skipped of skippedDocuments) {
+    const current = summaryByCode.get(skipped.errorCode) || {
+      count: 0,
+      samples: [],
+    };
+
+    current.count += 1;
+    if (current.samples.length < 3) {
+      current.samples.push(buildSkippedDocumentLabel(skipped.metadata));
+    }
+
+    summaryByCode.set(skipped.errorCode, current);
+  }
+
+  const warnings = [
+    `Skipped ${skippedDocuments.length} documents during matter-wide search.`,
+  ];
+
+  for (const errorCode of [...summaryByCode.keys()].sort()) {
+    const summary = summaryByCode.get(errorCode);
+    warnings.push(
+      `${errorCode}: ${summary.count} skipped (${summary.samples.join('; ')})`,
+    );
+  }
+
+  return warnings;
 }
 
 function createDocumentTools() {
@@ -337,36 +386,54 @@ function createDocumentTools() {
           helpers,
         );
         const hits = [];
+        const skippedDocuments = [];
 
         for (const record of records) {
           const metadata = mapDocumentRecord(record);
-          const state = await documentTextPipeline.getDocumentState({
-            caseUuid,
-            documentRecord: record,
-          });
-          const documentHits = buildSearchHits({
-            text: state.canonicalText,
-            pageOffsets: state.pageOffsets,
-            chunks: state.chunks,
-            query,
-          }).map((hit) => ({
-            ...hit,
-            document_uuid: metadata.document_uuid,
-            document_id: metadata.document_id,
-            name: metadata.name,
-            title: metadata.title,
-            mime_type: metadata.mime_type,
-            date_updated: metadata.date_updated,
-          }));
+          try {
+            const state = await documentTextPipeline.getDocumentState({
+              caseUuid,
+              documentRecord: record,
+            });
+            const documentHits = buildSearchHits({
+              text: state.canonicalText,
+              pageOffsets: state.pageOffsets,
+              chunks: state.chunks,
+              query,
+            }).map((hit) => ({
+              ...hit,
+              document_uuid: metadata.document_uuid,
+              document_id: metadata.document_id,
+              name: metadata.name,
+              title: metadata.title,
+              mime_type: metadata.mime_type,
+              date_updated: metadata.date_updated,
+            }));
 
-          hits.push(...documentHits);
+            hits.push(...documentHits);
+          } catch (error) {
+            if (error instanceof helpers.ToolError && MATTER_SEARCH_SKIPPABLE_ERROR_CODES.has(error.errorCode)) {
+              skippedDocuments.push({
+                errorCode: error.errorCode,
+                metadata,
+              });
+              continue;
+            }
+
+            throw error;
+          }
         }
 
-        return paginateItems({
-          helpers,
-          items: hits,
-          page,
-          pageSize,
+        const paged = helpers.paginateArray(hits, page, pageSize);
+
+        return helpers.successEnvelope({
+          data: paged.items,
+          page: paged.page,
+          pageSize: paged.pageSize,
+          totalRecords: paged.totalRecords,
+          totalPages: paged.totalPages,
+          truncated: false,
+          warnings: buildMatterSearchWarnings(skippedDocuments),
         });
       },
     },

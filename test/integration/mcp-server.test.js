@@ -2,6 +2,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const { Client } = require('@modelcontextprotocol/sdk/client/index.js');
 const { InMemoryTransport } = require('@modelcontextprotocol/sdk/inMemory.js');
+const { ToolError } = require('../../src/helpers');
 const { createMcpServer } = require('../../src/mcpServer');
 const { CANONICAL_TOOL_NAMES } = require('../../src/constants');
 const { jsonResponse } = require('../support/mockFetch');
@@ -206,6 +207,107 @@ test('in-process MCP server lists canonical tools and serves representative call
     arguments: { case_uuid: 'matter-uuid-1', page: 1, page_size: 10 },
   }));
   assert.equal(assignments.data[0].assignment_uuid, 'assignment-1');
+
+  await clientTransport.close();
+});
+
+test('in-process MCP server returns partial matter-wide search results with warnings', async () => {
+  const fakePipeline = {
+    async getDocumentState({ documentRecord }) {
+      if (documentRecord.guid === 'doc-1') {
+        return {
+          canonicalText: 'Lease terms\nRent due monthly.',
+          chunks: [{
+            chunkIndex: 0,
+            pageStart: 1,
+            pageEnd: 1,
+            startChar: 0,
+            endChar: 29,
+            text: 'Lease terms\nRent due monthly.',
+          }],
+          ocrModel: null,
+          ocrProvider: null,
+          pageCount: 1,
+          pageOffsets: [{ pageNumber: 1, startChar: 0, endChar: 29 }],
+          textSha256: 'hash-doc-1',
+          textSource: 'pdf_text',
+          totalTextChars: 29,
+          estimatedTokens: 8,
+        };
+      }
+
+      throw new ToolError({
+        errorCode: 'unsupported_media_type',
+        message: 'Unsupported email',
+        status: 415,
+      });
+    },
+  };
+
+  const fetchImpl = async (url) => {
+    const parsed = new URL(url);
+
+    if (parsed.pathname === '/api/v1/matters/matter-uuid-1/documents') {
+      return jsonResponse(200, [
+        {
+          internal_id: 500,
+          guid: 'doc-1',
+          name: 'lease.pdf',
+          title: 'Lease',
+          mime_type: 'application/pdf',
+          disk_file_size: 400,
+          date_create: '2024-01-04T00:00:00Z',
+          date_update: '2024-01-05T00:00:00Z',
+        },
+        {
+          internal_id: 501,
+          guid: 'doc-2',
+          name: 'email.eml',
+          title: 'Email',
+          mime_type: 'application/mbox',
+          disk_file_size: 200,
+          date_create: '2024-01-03T00:00:00Z',
+          date_update: '2024-01-04T00:00:00Z',
+        },
+      ]);
+    }
+
+    throw new Error(`Unexpected URL in integration test: ${url}`);
+  };
+
+  const server = createMcpServer({
+    config: {
+      baseUrl: 'https://example.legalserver.org/',
+      bearerToken: 'token',
+      timeoutMs: 30000,
+    },
+    fetchImpl,
+    documentTextPipeline: fakePipeline,
+  });
+
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+  const client = new Client({
+    name: 'legalserver-mcp-test-client',
+    version: '1.0.0',
+  });
+
+  await Promise.all([
+    server.connect(serverTransport),
+    client.connect(clientTransport),
+  ]);
+
+  const matterSearch = parseToolResult(await client.callTool({
+    name: 'matter_search_document_text',
+    arguments: { case_uuid: 'matter-uuid-1', query: 'rent' },
+  }));
+
+  assert.equal(matterSearch.ok, true);
+  assert.equal(matterSearch.data.length, 1);
+  assert.equal(matterSearch.data[0].document_uuid, 'doc-1');
+  assert.deepEqual(matterSearch.warnings, [
+    'Skipped 1 documents during matter-wide search.',
+    'unsupported_media_type: 1 skipped (501: email.eml)',
+  ]);
 
   await clientTransport.close();
 });

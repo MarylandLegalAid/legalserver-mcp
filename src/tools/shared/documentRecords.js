@@ -30,6 +30,14 @@ function resolveDocumentFormat(record) {
     return 'docx';
   }
 
+  if (mimeType === 'text/rtf' || mimeType === 'application/rtf') {
+    return 'rtf';
+  }
+
+  if (mimeType === 'application/mbox' || mimeType === 'message/rfc822') {
+    return 'eml';
+  }
+
   if (mimeType === 'application/pdf') {
     return 'pdf';
   }
@@ -54,6 +62,14 @@ function resolveDocumentFormat(record) {
     return 'docx';
   }
 
+  if (extension === '.rtf') {
+    return 'rtf';
+  }
+
+  if (extension === '.eml') {
+    return 'eml';
+  }
+
   if (extension === '.pdf') {
     return 'pdf';
   }
@@ -76,7 +92,7 @@ function resolveDocumentFormat(record) {
 function getDocumentTextStrategy(record) {
   const format = resolveDocumentFormat(record);
 
-  if (format === 'txt' || format === 'docx') {
+  if (format === 'txt' || format === 'docx' || format === 'rtf' || format === 'eml') {
     return 'direct';
   }
 
@@ -184,14 +200,32 @@ function toTimestamp(value, helpers) {
 }
 
 function compareMatterSearchOrder(left, right, helpers) {
-  const updatedDiff = toTimestamp(right.date_update, helpers) - toTimestamp(left.date_update, helpers);
-  if (updatedDiff !== 0) {
-    return updatedDiff;
+  const leftUpdated = toTimestamp(left.date_update, helpers);
+  const rightUpdated = toTimestamp(right.date_update, helpers);
+  const hasLeftUpdated = Number.isFinite(leftUpdated);
+  const hasRightUpdated = Number.isFinite(rightUpdated);
+
+  if (hasLeftUpdated && hasRightUpdated) {
+    const updatedDiff = rightUpdated - leftUpdated;
+    if (updatedDiff !== 0) {
+      return updatedDiff;
+    }
+  } else if (hasLeftUpdated || hasRightUpdated) {
+    return hasRightUpdated ? 1 : -1;
   }
 
-  const createdDiff = toTimestamp(right.date_create, helpers) - toTimestamp(left.date_create, helpers);
-  if (createdDiff !== 0) {
-    return createdDiff;
+  const leftCreated = toTimestamp(left.date_create, helpers);
+  const rightCreated = toTimestamp(right.date_create, helpers);
+  const hasLeftCreated = Number.isFinite(leftCreated);
+  const hasRightCreated = Number.isFinite(rightCreated);
+
+  if (hasLeftCreated && hasRightCreated) {
+    const createdDiff = rightCreated - leftCreated;
+    if (createdDiff !== 0) {
+      return createdDiff;
+    }
+  } else if (hasLeftCreated || hasRightCreated) {
+    return hasRightCreated ? 1 : -1;
   }
 
   const leftId = Number.parseInt(String(left.internal_id ?? ''), 10);

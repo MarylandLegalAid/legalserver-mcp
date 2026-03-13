@@ -202,6 +202,99 @@ test('matter_search_document_text searches all documents in deterministic order'
 
   assert.deepEqual(seen, ['doc-1', 'doc-2']);
   assert.equal(payload.data[0].document_uuid, 'doc-1');
+  assert.deepEqual(payload.warnings, []);
+});
+
+test('matter_search_document_text returns partial success with deterministic warnings for skippable failures', async () => {
+  const documents = [
+    {
+      internal_id: 601,
+      guid: 'doc-good',
+      name: 'lease.pdf',
+      title: 'Lease',
+      mime_type: 'application/pdf',
+      disk_file_size: 4000,
+      date_create: '2024-01-04T00:00:00Z',
+      date_update: '2024-01-06T00:00:00Z',
+    },
+    {
+      internal_id: 602,
+      guid: 'doc-unsupported',
+      name: 'email.eml',
+      title: 'Email',
+      mime_type: 'application/mbox',
+      disk_file_size: 1000,
+      date_create: '2024-01-03T00:00:00Z',
+      date_update: '2024-01-05T00:00:00Z',
+    },
+    {
+      internal_id: 603,
+      guid: 'doc-ocr',
+      name: 'scanned.pdf',
+      title: 'Scan',
+      mime_type: 'application/pdf',
+      disk_file_size: 2000,
+      date_create: '2024-01-02T00:00:00Z',
+      date_update: '2024-01-04T00:00:00Z',
+    },
+    {
+      internal_id: 604,
+      guid: 'doc-stale',
+      name: 'stale.pdf',
+      title: 'Stale',
+      mime_type: 'application/pdf',
+      disk_file_size: 2000,
+      date_create: '2024-01-01T00:00:00Z',
+      date_update: null,
+    },
+  ];
+  const registry = createRegistry({
+    responses: [jsonResponse(200, documents)],
+    documentTextPipeline: {
+      async getDocumentState({ documentRecord }) {
+        if (documentRecord.guid === 'doc-good') {
+          return fakeState;
+        }
+
+        if (documentRecord.guid === 'doc-unsupported') {
+          throw new helpers.ToolError({
+            errorCode: 'unsupported_media_type',
+            message: 'Unsupported',
+            status: 415,
+          });
+        }
+
+        if (documentRecord.guid === 'doc-ocr') {
+          throw new helpers.ToolError({
+            errorCode: 'ocr_unavailable',
+            message: 'OCR required',
+            status: 412,
+          });
+        }
+
+        throw new helpers.ToolError({
+          errorCode: 'extraction_failed',
+          message: 'Broken download',
+          status: 502,
+        });
+      },
+    },
+  });
+
+  const payload = await registry.execute('matter_search_document_text', {
+    case_uuid: 'matter-uuid-1',
+    query: 'rent',
+  });
+
+  assert.equal(payload.ok, true);
+  assert.equal(payload.data.length, 1);
+  assert.equal(payload.data[0].document_uuid, 'doc-good');
+  assert.deepEqual(payload.warnings, [
+    'Skipped 3 documents during matter-wide search.',
+    'extraction_failed: 1 skipped (604: stale.pdf)',
+    'ocr_unavailable: 1 skipped (603: scanned.pdf)',
+    'unsupported_media_type: 1 skipped (602: email.eml)',
+  ]);
 });
 
 test('document tools surface 404 when the document is missing on the matter', async () => {

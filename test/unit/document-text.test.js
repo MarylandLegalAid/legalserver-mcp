@@ -12,7 +12,9 @@ function createPipeline(overrides = {}) {
   const downloads = [];
   const extractorCalls = {
     docx: 0,
+    email: 0,
     pdf: 0,
+    rtf: 0,
     splitPdf: 0,
   };
   const client = {
@@ -23,7 +25,7 @@ function createPipeline(overrides = {}) {
         download_url: documentRecord.download_url ?? null,
       });
       return {
-        buffer: Buffer.from('fixture text', 'utf8'),
+        buffer: overrides.downloadBuffer || Buffer.from('fixture text', 'utf8'),
         contentType: overrides.contentType || 'text/plain',
         contentDisposition: overrides.contentDisposition || null,
         contentLength: 12,
@@ -36,26 +38,37 @@ function createPipeline(overrides = {}) {
     documentOcrProvider: overrides.documentOcrProvider || 'none',
     documentOcrModel: 'gemini-2.5-flash',
   };
+  const defaultExtractors = overrides.useRealTextExtractors ? {} : {
+    async extractDocxText() {
+      extractorCalls.docx += 1;
+      return ['Docx body'];
+    },
+    async extractEmailTextPages(buffer) {
+      extractorCalls.email += 1;
+      return [buffer.toString('utf8')];
+    },
+    async extractPdfTextPages() {
+      extractorCalls.pdf += 1;
+      return overrides.pdfPages || ['Digital PDF text that is definitely longer than one hundred characters. '.repeat(2)];
+    },
+    async extractRtfTextPages(buffer) {
+      extractorCalls.rtf += 1;
+      return [buffer.toString('utf8')];
+    },
+    async splitPdfIntoSinglePageBuffers() {
+      extractorCalls.splitPdf += 1;
+      return [
+        { pageNumber: 1, mimeType: 'application/pdf', bytes: Buffer.from('page-1') },
+        { pageNumber: 2, mimeType: 'application/pdf', bytes: Buffer.from('page-2') },
+      ];
+    },
+  };
   const pipeline = new DocumentTextPipeline({
     client,
     config,
     ocrProvider: overrides.ocrProvider || null,
     extractors: {
-      async extractDocxText() {
-        extractorCalls.docx += 1;
-        return ['Docx body'];
-      },
-      async extractPdfTextPages() {
-        extractorCalls.pdf += 1;
-        return overrides.pdfPages || ['Digital PDF text that is definitely longer than one hundred characters. '.repeat(2)];
-      },
-      async splitPdfIntoSinglePageBuffers() {
-        extractorCalls.splitPdf += 1;
-        return [
-          { pageNumber: 1, mimeType: 'application/pdf', bytes: Buffer.from('page-1') },
-          { pageNumber: 2, mimeType: 'application/pdf', bytes: Buffer.from('page-2') },
-        ];
-      },
+      ...defaultExtractors,
       ...(overrides.extractors || {}),
     },
   });
@@ -134,7 +147,7 @@ test('pipeline caches extraction results for repeated calls in one process', asy
     internal_id: 500,
     download_url: 'https://example.legalserver.org/modules/document/download.php?id=500',
   });
-  assert.deepEqual(extractorCalls, { docx: 0, pdf: 0, splitPdf: 0 });
+  assert.deepEqual(extractorCalls, { docx: 0, email: 0, pdf: 0, rtf: 0, splitPdf: 0 });
 });
 
 test('pipeline extracts documents successfully with identifiers only and no download_url', async () => {
@@ -171,6 +184,116 @@ test('pipeline extracts docx text through the injected extractor', async () => {
 
   assert.equal(state.textSource, 'docx_text');
   assert.equal(extractorCalls.docx, 1);
+});
+
+test('pipeline extracts rtf text and reports rtf_text source', async () => {
+  const { pipeline, extractorCalls } = createPipeline({
+    contentType: 'text/rtf',
+    downloadBuffer: Buffer.from('{\\rtf1\\ansi Hello\\par Second line}', 'utf8'),
+    useRealTextExtractors: true,
+  });
+  const state = await pipeline.getDocumentState({
+    caseUuid: 'matter-1',
+    documentRecord: {
+      guid: 'doc-rtf',
+      internal_id: 511,
+      name: 'report.rtf',
+      mime_type: 'text/rtf',
+    },
+  });
+
+  assert.equal(state.textSource, 'rtf_text');
+  assert.equal(state.canonicalText, 'Hello\nSecond line');
+  assert.equal(extractorCalls.rtf, 0);
+});
+
+test('pipeline extracts plain-text email and includes selected headers', async () => {
+  const { pipeline, extractorCalls } = createPipeline({
+    contentType: 'application/mbox',
+    downloadBuffer: Buffer.from(
+      [
+        'From: sender@example.com',
+        'To: recipient@example.com',
+        'Date: Thu, 12 Mar 2026 10:00:00 -0400',
+        'Subject: Rent update',
+        'Content-Type: text/plain; charset=utf-8',
+        '',
+        'The rent is due on the first of the month.',
+      ].join('\n'),
+      'utf8',
+    ),
+    useRealTextExtractors: true,
+  });
+  const state = await pipeline.getDocumentState({
+    caseUuid: 'matter-1',
+    documentRecord: {
+      guid: 'doc-eml-1',
+      internal_id: 512,
+      name: 'notice.eml',
+      mime_type: 'application/mbox',
+    },
+  });
+
+  assert.equal(state.textSource, 'email_text');
+  assert.equal(state.canonicalText.includes('Subject: Rent update'), true);
+  assert.equal(state.canonicalText.includes('The rent is due on the first of the month.'), true);
+  assert.equal(extractorCalls.email, 0);
+});
+
+test('pipeline extracts html-only email bodies as plain text', async () => {
+  const { pipeline } = createPipeline({
+    contentType: 'message/rfc822',
+    downloadBuffer: Buffer.from(
+      [
+        'From: sender@example.com',
+        'To: recipient@example.com',
+        'Subject: Hearing notice',
+        'Content-Type: text/html; charset=utf-8',
+        '',
+        '<html><body><p>Hearing is on <strong>Monday</strong>.</p><p>Bring documents.</p></body></html>',
+      ].join('\n'),
+      'utf8',
+    ),
+    useRealTextExtractors: true,
+  });
+  const state = await pipeline.getDocumentState({
+    caseUuid: 'matter-1',
+    documentRecord: {
+      guid: 'doc-eml-2',
+      internal_id: 513,
+      name: 'notice.eml',
+      mime_type: 'message/rfc822',
+    },
+  });
+
+  assert.equal(state.textSource, 'email_text');
+  assert.equal(state.canonicalText.includes('Hearing is on Monday.'), true);
+  assert.equal(state.canonicalText.includes('Bring documents.'), true);
+});
+
+test('pipeline rejects zero-byte email documents as unsupported', async () => {
+  const { pipeline } = createPipeline({
+    contentType: 'application/mbox',
+    downloadBuffer: Buffer.alloc(0),
+    useRealTextExtractors: true,
+  });
+
+  await assert.rejects(
+    () => pipeline.getDocumentState({
+      caseUuid: 'matter-1',
+      documentRecord: {
+        guid: 'doc-eml-3',
+        internal_id: 514,
+        name: 'empty.eml',
+        mime_type: 'application/mbox',
+      },
+    }),
+    (error) => {
+      assert.equal(error.errorCode, 'unsupported_media_type');
+      assert.equal(error.status, 415);
+      return true;
+    },
+  );
 });
 
 test('pipeline recovers document format from content-disposition when content-type is generic', async () => {

@@ -15,6 +15,7 @@ Version: `2.1.1`
   - `DOCUMENT_OCR_MODEL` (default `gemini-2.5-flash`)
   - `GOOGLE_CLOUD_PROJECT` required when OCR is enabled
   - `GOOGLE_CLOUD_LOCATION` (default `global`)
+  - ADC credentials via runtime identity, `gcloud auth application-default login`, or `GOOGLE_APPLICATION_CREDENTIALS`
 
 Digital-text TXT, DOCX, and many PDFs work without OCR. Scanned PDFs and supported images fail explicitly with `error_code: "ocr_unavailable"` until OCR is configured.
 
@@ -38,8 +39,12 @@ LEGALSERVER_BEARER_TOKEN=xxxxxxxx
 LEGALSERVER_TIMEOUT_MS=30000
 DOCUMENT_OCR_PROVIDER=none
 DOCUMENT_OCR_MODEL=gemini-2.5-flash
+GOOGLE_CLOUD_PROJECT=
 GOOGLE_CLOUD_LOCATION=global
+GOOGLE_APPLICATION_CREDENTIALS=
 ```
+
+When `DOCUMENT_OCR_PROVIDER=vertex_gemini`, set `GOOGLE_CLOUD_PROJECT` and ensure ADC is available either from the runtime environment, `gcloud auth application-default login`, or `GOOGLE_APPLICATION_CREDENTIALS`.
 
 ## Tool Set
 
@@ -73,7 +78,7 @@ All list/search tools default to `page=1` and `page_size=10`. `page_size` is cap
 
 `matter_list_documents` and `document_get_metadata` now include `text_strategy`:
 
-- `direct` for TXT and DOCX
+- `direct` for TXT, DOCX, RTF, and EML
 - `direct_or_ocr` for PDF
 - `ocr` for `image/png`, `image/jpeg`, and `image/webp`
 - `unsupported` for everything else
@@ -82,6 +87,8 @@ Extraction rules:
 
 - TXT: UTF-8 decode and normalize
 - DOCX: `mammoth.extractRawText`
+- RTF: in-process plain-text conversion with paragraph preservation where possible
+- EML: RFC822-style header/body extraction, `text/plain` preferred, HTML converted to plain text
 - PDF: embedded text first, OCR fallback when normalized embedded text is under `100` non-whitespace chars
 - Images: OCR only for PNG, JPEG, and WebP
 - Max document size: `50 MB`
@@ -156,7 +163,7 @@ When LegalServer returns a broken document endpoint, phase 2.5 now surfaces clea
   - `date_created DESC`
   - `document_id ASC`
 
-If any document in scope requires OCR and OCR is unavailable or fails, the whole matter-wide search fails explicitly instead of returning partial results.
+`matter_search_document_text` now returns partial success when some documents cannot be searched. Unsupported, OCR-blocked, oversized, and broken-download documents are skipped and summarized in `warnings`.
 
 ## LibreChat `stdio` Example
 
