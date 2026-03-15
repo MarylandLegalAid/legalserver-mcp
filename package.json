@@ -8,7 +8,9 @@
     "test": "node --test",
     "smoke": "node scripts/smoke.js",
     "manual:phase2": "node scripts/manual-phase2.js",
-    "manual:phase3": "node scripts/manual-phase3.js"
+    "manual:phase3": "node scripts/manual-phase3.js",
+    "benchmark:discover": "node scripts/benchmark-discover.js",
+    "benchmark:tools": "node scripts/benchmark-tools.js"
   },
   "keywords": [
     "mcp",

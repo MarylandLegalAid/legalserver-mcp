@@ -17,6 +17,8 @@ Version: `3.0.0`
   - `MCP_SHARED_SECRET` (recommended for production)
   - `MCP_SHARED_SECRET_HEADER` (default `x-legalserver-mcp-secret`)
   - `LEGALSERVER_USER_EMAIL_HEADER` (default `x-legalserver-user-email`)
+  - `MATTER_CURRENT_USER_CACHE_TTL_MS` (default `60000`, `0` disables current-user matter caching)
+  - `MATTER_CURRENT_USER_FETCH_CONCURRENCY` (default `4`, max `8`)
 - Optional OCR:
   - `DOCUMENT_OCR_PROVIDER=vertex_gemini`
   - `DOCUMENT_OCR_MODEL` (default `gemini-2.5-flash`)
@@ -52,6 +54,8 @@ MCP_ALLOWED_HOSTS=legalserver-mcp,localhost,127.0.0.1
 MCP_SHARED_SECRET=replace-me
 MCP_SHARED_SECRET_HEADER=x-legalserver-mcp-secret
 LEGALSERVER_USER_EMAIL_HEADER=x-legalserver-user-email
+MATTER_CURRENT_USER_CACHE_TTL_MS=60000
+MATTER_CURRENT_USER_FETCH_CONCURRENCY=4
 DOCUMENT_OCR_PROVIDER=none
 DOCUMENT_OCR_MODEL=gemini-2.5-flash
 GOOGLE_CLOUD_PROJECT=
@@ -113,10 +117,34 @@ Phase 3 global discovery tools:
 - `organization_get`
 - `organization_lookup_by_name`
 - `matter_list_current_user`
+- `matter_list_current_user_active`
 
 All list/search tools default to `page=1` and `page_size=10`. `page_size` is capped at `25`.
 Exact-match convenience lookups return `404 not_found` when no exact match exists and `409 multiple_matches` when more than one exact match is found.
 Some LegalServer tenants reject the documented `/api/v1/events?date=...` filter. When that happens, `event_search` and `event_list_by_date` fall back to a bounded local date filter over descending event pages and emit warnings describing the scanned window.
+
+## Benchmarking
+
+The repo includes a production-safe benchmark harness for measuring MCP tool latency and identifying workflows that may be better served by the LegalServer Reports API.
+
+Commands:
+
+```bash
+npm run benchmark:discover
+npm run benchmark:tools
+```
+
+`benchmark:discover` uses the configured LegalServer API credentials to auto-discover representative production fixtures and writes them to `.bench/fixtures.local.json`.
+`benchmark:tools` reuses that fixture manifest, runs each tool through the local Streamable HTTP MCP server, records both end-to-end MCP latency and underlying LegalServer request timing, writes raw results under `.bench/results/`, and updates [`docs/tool-latency.md`](./docs/tool-latency.md) with a sanitized summary.
+
+The benchmark harness is intentionally sequential, inserts a pause between samples, and aborts after repeated `429` or `503` responses. `.bench/` is gitignored because raw fixture manifests and request traces may contain production identifiers.
+
+Custom report recommendations in the benchmark output are intentionally conservative:
+
+- strong candidates are row-oriented tools that fan out across many LegalServer requests or rely on bounded local filtering
+- unlikely candidates are direct detail endpoints and document-text workflows that depend on binaries, OCR, or full-text search
+
+When evaluating report replacements, keep the reports narrow and filtered. LegalServer documents the Reports API as suitable for filtered report retrieval, while large or long-running exports should move to Data Export instead.
 
 ## Document Text Behavior
 
@@ -256,6 +284,8 @@ MCP_ALLOWED_HOSTS=legalserver-mcp,localhost,127.0.0.1
 MCP_SHARED_SECRET=replace-me
 MCP_SHARED_SECRET_HEADER=x-legalserver-mcp-secret
 LEGALSERVER_USER_EMAIL_HEADER=x-legalserver-user-email
+MATTER_CURRENT_USER_CACHE_TTL_MS=60000
+MATTER_CURRENT_USER_FETCH_CONCURRENCY=4
 ```
 
 The MCP service should not publish a host port in the production Compose deployment.
@@ -306,6 +336,7 @@ Use only these tools:
 - `event_list_current_user_on_date`
 - `event_list_current_user_between_dates`
 - `matter_list_current_user`
+- `matter_list_current_user_active`
 - `user_get_current`
 - `contact_lookup_by_email`
 - `user_lookup_by_login`
@@ -313,7 +344,7 @@ Use only these tools:
 
 Example server instructions:
 
-> When the user says "my", prefer the current-user tools that rely on the forwarded LegalServer email header. Use `task_list_current_user_on_date` and `task_list_current_user_between_dates` for workload questions, `event_list_current_user_on_date` and `event_list_current_user_between_dates` for schedule questions, `matter_list_current_user` for assigned-matter questions, and `user_get_current` for profile questions. Use the exact-match lookup tools first when the user provides a contact email, user login, or organization name.
+> When the user says "my", prefer the current-user tools that rely on the forwarded LegalServer email header. Use `task_list_current_user_on_date` and `task_list_current_user_between_dates` for workload questions, `event_list_current_user_on_date` and `event_list_current_user_between_dates` for schedule questions, `matter_list_current_user_active` for active assigned-matter questions, `matter_list_current_user` when the user explicitly wants all or historical assigned matters, and `user_get_current` for profile questions. Use the exact-match lookup tools first when the user provides a contact email, user login, or organization name.
 
 ## Validation
 

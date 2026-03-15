@@ -7,7 +7,12 @@ const {
   PREVIEW_MAX_CHARS,
 } = require('../constants');
 const { caseUuidProperty, pageProperties } = require('./shared/schemas');
-const { currentUserMatchesUserRef, resolveCurrentUser } = require('./shared/currentUser');
+const { currentUserMatchesUserRef, readHeaderValue, resolveCurrentUser } = require('./shared/currentUser');
+const { PromiseCache } = require('./shared/promiseCache');
+
+const ACTIVE_CURRENT_USER_MATTER_DISPOSITIONS = ['Open', 'Pending', 'Incomplete Intake', 'Prescreen'];
+const ASSIGNMENT_VISIBILITY_ERROR_MESSAGE = 'Matter search results did not include assignments. This tool requires a LegalServer API role that exposes assignment arrays in /api/v1/matters full results.';
+const currentUserMatterScanCache = new PromiseCache();
 
 function mapNote(note, helpers) {
   const plainBody = note.is_html ? helpers.htmlToText(note.body) : String(note.body ?? '');
@@ -284,73 +289,318 @@ function filterMatchingAssignments(record, helpers, currentUser, currentOnly) {
   });
 }
 
-async function runCurrentUserMatterList({ args, client, config, helpers, requestInfo }) {
-  const currentUser = await resolveCurrentUser({
+function createAssignmentVisibilityUnavailableError(helpers) {
+  return new helpers.ToolError({
+    errorCode: 'assignment_visibility_unavailable',
+    message: ASSIGNMENT_VISIBILITY_ERROR_MESSAGE,
+    status: 412,
+  });
+}
+
+function buildMatterCurrentUserFilters(args, overrides = {}) {
+  return {
+    assignment_type: args.assignment_type ?? null,
+    case_disposition: overrides.case_disposition ?? args.case_disposition ?? null,
+    current_only: args.current_only === undefined ? true : args.current_only,
+    legal_problem_code: args.legal_problem_code ?? null,
+  };
+}
+
+function buildMatterSearchQuery(filters, pageNumber) {
+  return {
+    results: 'full',
+    page_number: pageNumber,
+    page_size: MAX_PAGE_SIZE,
+    case_disposition: filters.case_disposition,
+    legal_problem_code: filters.legal_problem_code,
+    'assignments:type': filters.assignment_type,
+  };
+}
+
+function processMatterScanResponse({ response, helpers, currentOnly, currentUser }) {
+  const records = Array.isArray(response.data) ? response.data : [];
+  const sawAssignmentField = records.some((record) => Object.prototype.hasOwnProperty.call(record, 'assignments'));
+  if (!sawAssignmentField && records.length > 0) {
+    throw createAssignmentVisibilityUnavailableError(helpers);
+  }
+
+  const matches = [];
+  for (const record of records) {
+    const matchingAssignments = filterMatchingAssignments(record, helpers, currentUser, currentOnly);
+    if (matchingAssignments.length === 0) {
+      continue;
+    }
+
+    matches.push(mapCurrentUserMatterSummary(record, matchingAssignments, helpers));
+  }
+
+  return {
+    matches,
+    recordCount: records.length,
+    sawAssignmentField,
+    totalPages: response.totalPages || 0,
+  };
+}
+
+async function runWithConcurrency(items, concurrency, worker) {
+  const results = new Array(items.length);
+  let nextIndex = 0;
+  const workerCount = Math.max(1, Math.min(concurrency, items.length));
+
+  await Promise.all(Array.from({ length: workerCount }, async () => {
+    while (nextIndex < items.length) {
+      const currentIndex = nextIndex;
+      nextIndex += 1;
+      results[currentIndex] = await worker(items[currentIndex], currentIndex);
+    }
+  }));
+
+  return results;
+}
+
+async function scanCurrentUserMatterPages({ client, config, currentUser, filters, helpers }) {
+  const currentOnly = filters.current_only;
+  const firstResponse = await client.getJson('/api/v1/matters', {
+    query: buildMatterSearchQuery(filters, 1),
+  });
+  const firstProcessed = processMatterScanResponse({
+    response: firstResponse,
+    helpers,
+    currentOnly,
+    currentUser,
+  });
+  const pageMatches = new Map([[1, firstProcessed.matches]]);
+  let sawAnyRecords = firstProcessed.recordCount > 0;
+  let sawAssignmentField = firstProcessed.sawAssignmentField;
+  const totalPages = firstProcessed.totalPages;
+  const finalScanPage = totalPages === 0 ? 1 : Math.min(totalPages, MATTER_CURRENT_USER_SCAN_MAX_PAGES);
+  const remainingPages = [];
+
+  for (let scanPage = 2; scanPage <= finalScanPage; scanPage += 1) {
+    remainingPages.push(scanPage);
+  }
+
+  const pageResponses = await runWithConcurrency(
+    remainingPages,
+    config?.matterCurrentUserFetchConcurrency ?? 4,
+    async (scanPage) => ({
+      page: scanPage,
+      processed: processMatterScanResponse({
+        response: await client.getJson('/api/v1/matters', {
+          query: buildMatterSearchQuery(filters, scanPage),
+        }),
+        helpers,
+        currentOnly,
+        currentUser,
+      }),
+    }),
+  );
+
+  for (const pageResponse of pageResponses) {
+    sawAnyRecords = sawAnyRecords || pageResponse.processed.recordCount > 0;
+    sawAssignmentField = sawAssignmentField || pageResponse.processed.sawAssignmentField;
+    pageMatches.set(pageResponse.page, pageResponse.processed.matches);
+  }
+
+  const matches = [];
+  for (let scanPage = 1; scanPage <= finalScanPage; scanPage += 1) {
+    matches.push(...(pageMatches.get(scanPage) || []));
+  }
+
+  if (!sawAssignmentField && sawAnyRecords) {
+    throw createAssignmentVisibilityUnavailableError(helpers);
+  }
+
+  return {
+    matches,
+    scannedAllPages: totalPages === 0 || finalScanPage >= totalPages,
+  };
+}
+
+function buildMatterAssignmentIdentity(assignment) {
+  return assignment.assignment_uuid
+    || (assignment.id !== null && assignment.id !== undefined ? `id:${assignment.id}` : null)
+    || JSON.stringify({
+      end_date: assignment.end_date,
+      start_date: assignment.start_date,
+      type: assignment.type,
+      user_uuid: assignment.user?.user_uuid ?? null,
+    });
+}
+
+function mergeMatchingAssignments(existingAssignments, nextAssignments) {
+  const merged = [...existingAssignments];
+  const seen = new Set(merged.map((assignment) => buildMatterAssignmentIdentity(assignment)));
+
+  for (const assignment of nextAssignments) {
+    const key = buildMatterAssignmentIdentity(assignment);
+    if (seen.has(key)) {
+      continue;
+    }
+
+    seen.add(key);
+    merged.push(assignment);
+  }
+
+  return merged;
+}
+
+function compareActiveCurrentUserMatters(left, right) {
+  const leftOpened = left.date_opened || '';
+  const rightOpened = right.date_opened || '';
+  if (leftOpened !== rightOpened) {
+    return rightOpened.localeCompare(leftOpened);
+  }
+
+  const leftCaseNumber = left.case_number || '';
+  const rightCaseNumber = right.case_number || '';
+  if (leftCaseNumber !== rightCaseNumber) {
+    return leftCaseNumber.localeCompare(rightCaseNumber);
+  }
+
+  return String(left.case_uuid || '').localeCompare(String(right.case_uuid || ''));
+}
+
+async function scanActiveCurrentUserMatters({ client, config, currentUser, filters, helpers }) {
+  const scans = [];
+  const combinedDispositionFilter = ACTIVE_CURRENT_USER_MATTER_DISPOSITIONS.join(',');
+
+  try {
+    scans.push(await scanCurrentUserMatterPages({
+      client,
+      config,
+      currentUser,
+      filters: {
+        ...filters,
+        case_disposition: combinedDispositionFilter,
+      },
+      helpers,
+    }));
+  } catch (error) {
+    if (error?.status !== 400) {
+      throw error;
+    }
+
+    for (const caseDisposition of ACTIVE_CURRENT_USER_MATTER_DISPOSITIONS) {
+      scans.push(await scanCurrentUserMatterPages({
+        client,
+        config,
+        currentUser,
+        filters: {
+          ...filters,
+          case_disposition: caseDisposition,
+        },
+        helpers,
+      }));
+    }
+  }
+
+  const mergedByCaseUuid = new Map();
+
+  for (const scan of scans) {
+    for (const match of scan.matches) {
+      const existing = mergedByCaseUuid.get(match.case_uuid);
+      if (!existing) {
+        mergedByCaseUuid.set(match.case_uuid, {
+          ...match,
+          matching_assignments: [...match.matching_assignments],
+        });
+        continue;
+      }
+
+      existing.matching_assignments = mergeMatchingAssignments(
+        existing.matching_assignments,
+        match.matching_assignments,
+      );
+    }
+  }
+
+  return {
+    matches: [...mergedByCaseUuid.values()].sort(compareActiveCurrentUserMatters),
+    scannedAllPages: scans.every((scan) => scan.scannedAllPages),
+  };
+}
+
+function buildCurrentUserMatterWarnings(scannedAllPages) {
+  if (scannedAllPages) {
+    return [];
+  }
+
+  return [
+    `The scan stopped after ${MATTER_CURRENT_USER_SCAN_MAX_PAGES} upstream matter pages, so counts and next-page hints reflect the scanned window only.`,
+  ];
+}
+
+function buildCurrentUserMatterCacheKey({ email, filters, variant }) {
+  return JSON.stringify({
+    email,
+    filters,
+    variant,
+  });
+}
+
+async function runCurrentUserMatterScan({ args, client, config, helpers, requestInfo, variant }) {
+  const headerName = config?.userEmailHeader || 'x-legalserver-user-email';
+  const email = readHeaderValue(requestInfo?.headers, headerName);
+  const filters = buildMatterCurrentUserFilters(args);
+  const cacheKey = email
+    ? buildCurrentUserMatterCacheKey({
+        email: email.toLowerCase(),
+        filters,
+        variant,
+      })
+    : null;
+
+  const executeScan = async () => {
+    const currentUser = await resolveCurrentUser({
+      client,
+      config,
+      helpers,
+      requestInfo,
+    });
+
+    if (variant === 'active') {
+      return scanActiveCurrentUserMatters({
+        client,
+        config,
+        currentUser,
+        filters,
+        helpers,
+      });
+    }
+
+    return scanCurrentUserMatterPages({
+      client,
+      config,
+      currentUser,
+      filters,
+      helpers,
+    });
+  };
+
+  if (!cacheKey) {
+    return executeScan();
+  }
+
+  return currentUserMatterScanCache.getOrCreate(
+    cacheKey,
+    config?.matterCurrentUserCacheTtlMs ?? 0,
+    executeScan,
+  );
+}
+
+async function runCurrentUserMatterList({ args, client, config, helpers, requestInfo, variant = 'all' }) {
+  const page = helpers.validatePage(args.page);
+  const pageSize = helpers.validatePageSize(args.page_size);
+  const scan = await runCurrentUserMatterScan({
+    args,
     client,
     config,
     helpers,
     requestInfo,
+    variant,
   });
-  const page = helpers.validatePage(args.page);
-  const pageSize = helpers.validatePageSize(args.page_size);
-  const currentOnly = args.current_only === undefined ? true : args.current_only;
-  const matches = [];
-  let scannedAllPages = false;
-  let sawAssignmentField = false;
-
-  for (let scanPage = 1; scanPage <= MATTER_CURRENT_USER_SCAN_MAX_PAGES; scanPage += 1) {
-    const response = await client.getJson('/api/v1/matters', {
-      query: {
-        results: 'full',
-        page_number: scanPage,
-        page_size: MAX_PAGE_SIZE,
-        case_disposition: args.case_disposition,
-        legal_problem_code: args.legal_problem_code,
-        'assignments:type': args.assignment_type,
-      },
-    });
-
-    const records = Array.isArray(response.data) ? response.data : [];
-    if (records.some((record) => Object.prototype.hasOwnProperty.call(record, 'assignments'))) {
-      sawAssignmentField = true;
-    } else if (records.length > 0) {
-      throw new helpers.ToolError({
-        errorCode: 'assignment_visibility_unavailable',
-        message: 'Matter search results did not include assignments. This tool requires a LegalServer API role that exposes assignment arrays in /api/v1/matters full results.',
-        status: 412,
-      });
-    }
-
-    for (const record of records) {
-      const matchingAssignments = filterMatchingAssignments(record, helpers, currentUser, currentOnly);
-      if (matchingAssignments.length === 0) {
-        continue;
-      }
-
-      matches.push(mapCurrentUserMatterSummary(record, matchingAssignments, helpers));
-    }
-
-    const totalPages = response.totalPages || 0;
-    if (totalPages === 0 || scanPage >= totalPages) {
-      scannedAllPages = true;
-      break;
-    }
-  }
-
-  if (!sawAssignmentField && matches.length === 0) {
-    throw new helpers.ToolError({
-      errorCode: 'assignment_visibility_unavailable',
-      message: 'Matter search results did not include assignments. This tool requires a LegalServer API role that exposes assignment arrays in /api/v1/matters full results.',
-      status: 412,
-    });
-  }
-
-  const paged = helpers.paginateArray(matches, page, pageSize);
-  const warnings = [];
-
-  if (!scannedAllPages) {
-    warnings.push(`The scan stopped after ${MATTER_CURRENT_USER_SCAN_MAX_PAGES} upstream matter pages, so counts and next-page hints reflect the scanned window only.`);
-  }
+  const paged = helpers.paginateArray(scan.matches, page, pageSize);
 
   return helpers.successEnvelope({
     data: paged.items,
@@ -358,9 +608,37 @@ async function runCurrentUserMatterList({ args, client, config, helpers, request
     pageSize: paged.pageSize,
     totalRecords: paged.totalRecords,
     totalPages: paged.totalPages,
-    truncated: !scannedAllPages,
-    warnings,
+    truncated: !scan.scannedAllPages,
+    warnings: buildCurrentUserMatterWarnings(scan.scannedAllPages),
   });
+}
+
+function currentUserMatterListProperties({ includeCaseDisposition = true } = {}) {
+  const properties = {
+    ...pageProperties(),
+    legal_problem_code: {
+      type: 'string',
+      description: 'Optional legal problem code filter.',
+    },
+    assignment_type: {
+      type: 'string',
+      description: 'Optional assignment type filter mapped to the matter search assignments:type key.',
+    },
+    current_only: {
+      type: 'boolean',
+      default: true,
+      description: 'Set false to include historical assignments that are no longer current.',
+    },
+  };
+
+  if (includeCaseDisposition) {
+    properties.case_disposition = {
+      type: 'string',
+      description: 'Optional LegalServer case disposition filter.',
+    };
+  }
+
+  return properties;
 }
 
 async function apiListHandler({ args, client, helpers, queryBuilder, pathTemplate, pathParams, mapper, warningsFactory, postProcess }) {
@@ -492,26 +770,7 @@ function createMatterTools() {
       description: 'List matters assigned to the current request user.',
       inputSchema: {
         type: 'object',
-        properties: {
-          ...pageProperties(),
-          case_disposition: {
-            type: 'string',
-            description: 'Optional LegalServer case disposition filter.',
-          },
-          legal_problem_code: {
-            type: 'string',
-            description: 'Optional legal problem code filter.',
-          },
-          assignment_type: {
-            type: 'string',
-            description: 'Optional assignment type filter mapped to the matter search assignments:type key.',
-          },
-          current_only: {
-            type: 'boolean',
-            default: true,
-            description: 'Set false to include historical assignments that are no longer current.',
-          },
-        },
+        properties: currentUserMatterListProperties(),
         additionalProperties: false,
       },
       budgetPolicy: {
@@ -524,6 +783,27 @@ function createMatterTools() {
         config,
         helpers,
         requestInfo,
+      }),
+    },
+    {
+      name: 'matter_list_current_user_active',
+      description: 'List active matters assigned to the current request user.',
+      inputSchema: {
+        type: 'object',
+        properties: currentUserMatterListProperties({ includeCaseDisposition: false }),
+        additionalProperties: false,
+      },
+      budgetPolicy: {
+        page_size_default: DEFAULT_PAGE_SIZE,
+        page_size_max: MAX_PAGE_SIZE,
+      },
+      handler: ({ args, client, config, helpers, requestInfo }) => runCurrentUserMatterList({
+        args,
+        client,
+        config,
+        helpers,
+        requestInfo,
+        variant: 'active',
       }),
     },
     {

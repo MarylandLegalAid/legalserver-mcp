@@ -5,13 +5,14 @@ const { LegalServerClient } = require('../../src/legalserverClient');
 const { createToolRegistry } = require('../../src/toolRegistry');
 const { createSequentialFetch, jsonResponse } = require('../support/mockFetch');
 
-function createRegistry(responses) {
+function createRegistry(responses, options = {}) {
   const calls = [];
+  const fetchImpl = options.fetchImpl || createSequentialFetch(responses, calls);
   const client = new LegalServerClient({
     baseUrl: 'https://example.legalserver.org/',
     bearerToken: 'token',
     timeoutMs: 30000,
-    fetchImpl: createSequentialFetch(responses, calls),
+    fetchImpl,
   });
 
   return {
@@ -26,6 +27,9 @@ function createRegistry(responses) {
       },
       config: {
         userEmailHeader: 'x-legalserver-user-email',
+        matterCurrentUserCacheTtlMs: 60000,
+        matterCurrentUserFetchConcurrency: 4,
+        ...(options.config || {}),
       },
     }),
   };
@@ -862,6 +866,248 @@ test('matter_list_current_user fails when matter search omits assignments', asyn
       assert.equal(error.status, 412);
       return true;
     },
+  );
+});
+
+test('matter_list_current_user reuses cached scan results for identical filters across pages', async () => {
+  const cacheUser = {
+    ...sampleUser,
+    email: 'cache-jordan@example.org',
+  };
+  const { registry, calls } = createRegistry([
+    jsonResponse(200, makePaginated([cacheUser], 1, 25, 1, 1)),
+    jsonResponse(200, makePaginated([sampleMatter], 1, 25, 1, 1)),
+  ]);
+
+  const requestContext = {
+    requestInfo: {
+      headers: {
+        'x-legalserver-user-email': 'cache-jordan@example.org',
+      },
+    },
+  };
+
+  await registry.execute('matter_list_current_user', { assignment_type: 'Primary', page_size: 1 }, requestContext);
+  await registry.execute('matter_list_current_user', { assignment_type: 'Primary', page: 1, page_size: 10 }, requestContext);
+
+  assert.equal(calls.length, 2);
+});
+
+test('matter_list_current_user disables scan result caching when TTL is zero', async () => {
+  const noCacheUser = {
+    ...sampleUser,
+    email: 'nocache-jordan@example.org',
+  };
+  const { registry, calls } = createRegistry([
+    jsonResponse(200, makePaginated([noCacheUser], 1, 25, 1, 1)),
+    jsonResponse(200, makePaginated([sampleMatter], 1, 25, 1, 1)),
+    jsonResponse(200, makePaginated([noCacheUser], 1, 25, 1, 1)),
+    jsonResponse(200, makePaginated([sampleMatter], 1, 25, 1, 1)),
+  ], {
+    config: {
+      matterCurrentUserCacheTtlMs: 0,
+    },
+  });
+
+  const requestContext = {
+    requestInfo: {
+      headers: {
+        'x-legalserver-user-email': 'nocache-jordan@example.org',
+      },
+    },
+  };
+
+  await registry.execute('matter_list_current_user', {}, requestContext);
+  await registry.execute('matter_list_current_user', {}, requestContext);
+
+  assert.equal(calls.length, 4);
+});
+
+test('matter_list_current_user shares an in-flight scan across concurrent identical requests', async () => {
+  const inFlightUser = {
+    ...sampleUser,
+    email: 'inflight-jordan@example.org',
+  };
+  const { registry, calls } = createRegistry([
+    jsonResponse(200, makePaginated([inFlightUser], 1, 25, 1, 1)),
+    jsonResponse(200, makePaginated([sampleMatter], 1, 25, 1, 1)),
+  ]);
+
+  const requestContext = {
+    requestInfo: {
+      headers: {
+        'x-legalserver-user-email': 'inflight-jordan@example.org',
+      },
+    },
+  };
+
+  const [first, second] = await Promise.all([
+    registry.execute('matter_list_current_user', { page_size: 1 }, requestContext),
+    registry.execute('matter_list_current_user', { page_size: 1 }, requestContext),
+  ]);
+
+  assert.deepEqual(first.data, second.data);
+  assert.equal(calls.length, 2);
+});
+
+test('matter_list_current_user preserves page ordering while fetching matter pages concurrently', async () => {
+  const orderedUser = {
+    ...sampleUser,
+    email: 'ordered-jordan@example.org',
+  };
+  const calls = [];
+  let activeMatterFetches = 0;
+  let maxActiveMatterFetches = 0;
+  const matterPages = new Map([
+    [1, makePaginated([sampleMatter], 1, 25, 3, 3)],
+    [2, makePaginated([{
+      ...sampleMatter,
+      matter_uuid: 'matter-uuid-page-2',
+      case_id: 604,
+      case_number: '26-0004',
+    }], 2, 25, 3, 3)],
+    [3, makePaginated([{
+      ...sampleMatter,
+      matter_uuid: 'matter-uuid-page-3',
+      case_id: 605,
+      case_number: '26-0005',
+    }], 3, 25, 3, 3)],
+  ]);
+
+  const fetchImpl = async (url, options) => {
+    calls.push({ url, options });
+    const parsed = new URL(url);
+    if (parsed.pathname === '/api/v1/users') {
+      return jsonResponse(200, makePaginated([orderedUser], 1, 25, 1, 1));
+    }
+
+    const page = Number(parsed.searchParams.get('page_number'));
+    const delayMs = page === 2 ? 30 : page === 3 ? 5 : 0;
+    if (page > 1) {
+      activeMatterFetches += 1;
+      maxActiveMatterFetches = Math.max(maxActiveMatterFetches, activeMatterFetches);
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, delayMs));
+
+    if (page > 1) {
+      activeMatterFetches -= 1;
+    }
+
+    return jsonResponse(200, matterPages.get(page));
+  };
+
+  const { registry } = createRegistry([], {
+    config: {
+      matterCurrentUserFetchConcurrency: 2,
+    },
+    fetchImpl,
+  });
+
+  const payload = await registry.execute(
+    'matter_list_current_user',
+    {},
+    {
+      requestInfo: {
+        headers: {
+          'x-legalserver-user-email': 'ordered-jordan@example.org',
+        },
+      },
+    },
+  );
+
+  assert.deepEqual(payload.data.map((item) => item.case_uuid), [
+    'matter-uuid-current',
+    'matter-uuid-page-2',
+    'matter-uuid-page-3',
+  ]);
+  assert.equal(maxActiveMatterFetches, 2);
+});
+
+test('matter_list_current_user_active prefers one combined active-disposition query and sorts results deterministically', async () => {
+  const activeUser = {
+    ...sampleUser,
+    email: 'active-jordan@example.org',
+  };
+  const openMatter = {
+    ...sampleMatter,
+    matter_uuid: 'matter-uuid-open',
+    case_id: 606,
+    case_number: '26-0006',
+    date_opened: '2026-01-15',
+    case_disposition: 'Open',
+  };
+  const pendingMatter = {
+    ...sampleMatter,
+    matter_uuid: 'matter-uuid-pending',
+    case_id: 607,
+    case_number: '26-0007',
+    date_opened: '2026-03-01',
+    case_disposition: 'Pending',
+  };
+  const { registry, calls } = createRegistry([
+    jsonResponse(200, makePaginated([activeUser], 1, 25, 1, 1)),
+    jsonResponse(200, makePaginated([openMatter, pendingMatter], 1, 25, 1, 2)),
+  ]);
+
+  const payload = await registry.execute(
+    'matter_list_current_user_active',
+    {},
+    {
+      requestInfo: {
+        headers: {
+          'x-legalserver-user-email': 'active-jordan@example.org',
+        },
+      },
+    },
+  );
+
+  assert.deepEqual(payload.data.map((item) => item.case_uuid), [
+    'matter-uuid-pending',
+    'matter-uuid-open',
+  ]);
+  assert.equal(
+    new URL(calls[1].url).searchParams.get('case_disposition'),
+    'Open,Pending,Incomplete Intake,Prescreen',
+  );
+});
+
+test('matter_list_current_user_active falls back to per-disposition scans when a tenant rejects the combined filter', async () => {
+  const activeUser = {
+    ...sampleUser,
+    email: 'active-fallback@example.org',
+  };
+  const { registry, calls } = createRegistry([
+    jsonResponse(200, makePaginated([activeUser], 1, 25, 1, 1)),
+    jsonResponse(400, { invalid_search_keys: ['case_disposition'] }),
+    jsonResponse(200, makePaginated([sampleMatter], 1, 25, 1, 1)),
+    jsonResponse(200, makePaginated([], 1, 25, 0, 0)),
+    jsonResponse(200, makePaginated([], 1, 25, 0, 0)),
+    jsonResponse(200, makePaginated([], 1, 25, 0, 0)),
+  ]);
+
+  const payload = await registry.execute(
+    'matter_list_current_user_active',
+    {},
+    {
+      requestInfo: {
+        headers: {
+          'x-legalserver-user-email': 'active-fallback@example.org',
+        },
+      },
+    },
+  );
+
+  assert.deepEqual(payload.data.map((item) => item.case_uuid), ['matter-uuid-current']);
+  assert.deepEqual(
+    calls.slice(1).map((call) => new URL(call.url).searchParams.get('case_disposition')),
+    [
+      'Open,Pending,Incomplete Intake,Prescreen',
+      'Open',
+      'Pending',
+      'Incomplete Intake',
+      'Prescreen',
+    ],
   );
 });
 

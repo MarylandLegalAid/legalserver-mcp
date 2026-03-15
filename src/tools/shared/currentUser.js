@@ -102,6 +102,7 @@ function currentUserMatchesUserRef(currentUser, value) {
 
 module.exports = {
   currentUserMatchesUserRef,
+  readHeaderValue,
   resolveCurrentUser,
   resolveCurrentUserMatch,
 };

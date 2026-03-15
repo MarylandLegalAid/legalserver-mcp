@@ -1,4 +1,9 @@
-const { DEFAULT_TIMEOUT_MS } = require('./constants');
+const {
+  DEFAULT_MATTER_CURRENT_USER_CACHE_TTL_MS,
+  DEFAULT_MATTER_CURRENT_USER_FETCH_CONCURRENCY,
+  DEFAULT_TIMEOUT_MS,
+  MAX_MATTER_CURRENT_USER_FETCH_CONCURRENCY,
+} = require('./constants');
 
 function normalizeBaseUrl(rawBaseUrl) {
   if (!rawBaseUrl) {
@@ -30,6 +35,41 @@ function parseTimeout(rawTimeout) {
   }
 
   return timeoutMs;
+}
+
+function parseNonNegativeInteger(rawValue, fallback, fieldName) {
+  if (rawValue === undefined || rawValue === null || rawValue === '') {
+    return fallback;
+  }
+
+  const parsed = Number.parseInt(String(rawValue), 10);
+  if (!Number.isInteger(parsed) || parsed < 0) {
+    throw new Error(`${fieldName} must be a non-negative integer`);
+  }
+
+  return parsed;
+}
+
+function parseMatterCurrentUserCacheTtl(rawValue) {
+  return parseNonNegativeInteger(
+    rawValue,
+    DEFAULT_MATTER_CURRENT_USER_CACHE_TTL_MS,
+    'MATTER_CURRENT_USER_CACHE_TTL_MS',
+  );
+}
+
+function parseMatterCurrentUserFetchConcurrency(rawValue) {
+  const parsed = parseNonNegativeInteger(
+    rawValue,
+    DEFAULT_MATTER_CURRENT_USER_FETCH_CONCURRENCY,
+    'MATTER_CURRENT_USER_FETCH_CONCURRENCY',
+  );
+
+  if (parsed === 0) {
+    throw new Error('MATTER_CURRENT_USER_FETCH_CONCURRENCY must be at least 1');
+  }
+
+  return Math.min(parsed, MAX_MATTER_CURRENT_USER_FETCH_CONCURRENCY);
 }
 
 function parseHttpPort(rawPort) {
@@ -114,15 +154,20 @@ function loadConfig(env) {
     sharedSecret: normalizeOptionalString(env.MCP_SHARED_SECRET),
     sharedSecretHeader: normalizeHeaderName(env.MCP_SHARED_SECRET_HEADER, 'x-legalserver-mcp-secret'),
     userEmailHeader: normalizeHeaderName(env.LEGALSERVER_USER_EMAIL_HEADER),
+    matterCurrentUserCacheTtlMs: parseMatterCurrentUserCacheTtl(env.MATTER_CURRENT_USER_CACHE_TTL_MS),
+    matterCurrentUserFetchConcurrency: parseMatterCurrentUserFetchConcurrency(env.MATTER_CURRENT_USER_FETCH_CONCURRENCY),
   };
 }
 
 module.exports = {
   loadConfig,
   parseAllowedHosts,
+  parseMatterCurrentUserCacheTtl,
+  parseMatterCurrentUserFetchConcurrency,
   normalizeHeaderName,
   normalizeOptionalString,
   normalizeBaseUrl,
+  parseNonNegativeInteger,
   parseOcrProvider,
   parseHttpPort,
   parseTimeout,

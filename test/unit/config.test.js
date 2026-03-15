@@ -6,6 +6,8 @@ const {
   normalizeHeaderName,
   parseAllowedHosts,
   parseHttpPort,
+  parseMatterCurrentUserCacheTtl,
+  parseMatterCurrentUserFetchConcurrency,
   parseOcrProvider,
   parseTimeout,
 } = require('../../src/config');
@@ -28,6 +30,17 @@ test('parseTimeout uses default and rejects invalid values', () => {
   assert.throws(() => parseTimeout('0'), /positive integer/);
 });
 
+test('matter current-user cache and concurrency config defaults and validation', () => {
+  assert.equal(parseMatterCurrentUserCacheTtl(undefined), 60000);
+  assert.equal(parseMatterCurrentUserCacheTtl('0'), 0);
+  assert.throws(() => parseMatterCurrentUserCacheTtl('-1'), /MATTER_CURRENT_USER_CACHE_TTL_MS/);
+
+  assert.equal(parseMatterCurrentUserFetchConcurrency(undefined), 4);
+  assert.equal(parseMatterCurrentUserFetchConcurrency('8'), 8);
+  assert.equal(parseMatterCurrentUserFetchConcurrency('99'), 8);
+  assert.throws(() => parseMatterCurrentUserFetchConcurrency('0'), /at least 1/);
+});
+
 test('HTTP config defaults and validates values', () => {
   const config = loadConfig({
     LEGALSERVER_BASE_URL: 'https://example.legalserver.org/',
@@ -40,6 +53,8 @@ test('HTTP config defaults and validates values', () => {
   assert.equal(config.sharedSecret, null);
   assert.equal(config.sharedSecretHeader, 'x-legalserver-mcp-secret');
   assert.equal(config.userEmailHeader, 'x-legalserver-user-email');
+  assert.equal(config.matterCurrentUserCacheTtlMs, 60000);
+  assert.equal(config.matterCurrentUserFetchConcurrency, 4);
   assert.equal(parseHttpPort('8080'), 8080);
   assert.deepEqual(parseAllowedHosts(' legalserver-mcp, localhost , legalserver-mcp '), ['legalserver-mcp', 'localhost']);
   assert.equal(normalizeHeaderName(' X-Custom-User-Email '), 'x-custom-user-email');
@@ -53,11 +68,15 @@ test('HTTP config parses optional host filtering and shared secret settings', ()
     MCP_ALLOWED_HOSTS: 'legalserver-mcp, localhost,127.0.0.1',
     MCP_SHARED_SECRET: 'super-secret',
     MCP_SHARED_SECRET_HEADER: ' X-LegalServer-Mcp-Secret ',
+    MATTER_CURRENT_USER_CACHE_TTL_MS: '120000',
+    MATTER_CURRENT_USER_FETCH_CONCURRENCY: '6',
   });
 
   assert.deepEqual(config.allowedHosts, ['legalserver-mcp', 'localhost', '127.0.0.1']);
   assert.equal(config.sharedSecret, 'super-secret');
   assert.equal(config.sharedSecretHeader, 'x-legalserver-mcp-secret');
+  assert.equal(config.matterCurrentUserCacheTtlMs, 120000);
+  assert.equal(config.matterCurrentUserFetchConcurrency, 6);
 });
 
 test('OCR config defaults and validates provider-specific requirements', () => {
