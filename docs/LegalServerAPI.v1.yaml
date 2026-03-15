@@ -5864,7 +5864,7 @@ paths:
           $ref: '#/components/responses/503'
       operationId: post-api-v1-documents-documate
       description: |-
-        This endpoint acts very similarly to the [Post Documents](../reference/CoreAPI.v1.yaml/paths/~1api~1v1~1documents/post) endpoint but with three notable differences. 
+        This endpoint acts very similarly to the [Post Documents](../reference/LegalServerAPI.v1.yaml/paths/~1api~1v1~1documents/post) endpoint but with three notable differences. 
         1. It does not use a `metadata` parameter.
         2. It ignores all parameters other than `legalserver_matter_uuid`, `legalserver_subfolder`, and `save_to_sharepoint`.
         3. If a file named `files.zip` is included in the API call, that file is stored in a subfolder on the case named `Webhook Zip Files`. The files within the zip file are then extracted, saved to either the root folder for the case or the `legalserver_subfolder`, and then a case note is created linking to those files so they are easily found by an end user.
@@ -5953,7 +5953,7 @@ paths:
           $ref: '#/components/responses/503'
       operationId: post-api-v1-documents-matter_zip
       description: |-
-        This endpoint acts very similarly to the [Post Documents](../reference/CoreAPI.v1.yaml/paths/~1api~1v1~1documents/post) endpoint but with some notable differences. 
+        This endpoint acts very similarly to the [Post Documents](../reference/LegalServerAPI.v1.yaml/paths/~1api~1v1~1documents/post) endpoint but with some notable differences. 
         1. It does not use a `metadata` parameter.
         2. It ignores all parameters other than `legalserver_matter_uuid`, `legalserver_subfolder`, and `save_to_sharepoint`.
         3. If a file named `files.zip` is included in the API call, that file is stored in a subfolder on the case named `Webhook Zip Files`. The files within the zip file are then extracted, saved to either the root folder for the case or the `legalserver_subfolder`, and then a case note is created linking to those files so they are easily found by an end user.
