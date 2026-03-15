@@ -7,7 +7,7 @@ const { LegalServerClient } = require('./legalserverClient');
 const helpers = require('./helpers');
 const { createToolRegistry } = require('./toolRegistry');
 
-function createMcpServer({ config, fetchImpl, documentTextPipeline, ocrProvider }) {
+function createMcpRuntime({ config, fetchImpl, documentTextPipeline, ocrProvider }) {
   const client = new LegalServerClient({
     baseUrl: config.baseUrl,
     bearerToken: config.bearerToken,
@@ -22,9 +22,28 @@ function createMcpServer({ config, fetchImpl, documentTextPipeline, ocrProvider 
 
   const registry = createToolRegistry({
     client,
+    config,
     documentTextPipeline: pipeline,
     helpers,
   });
+
+  return {
+    client,
+    config,
+    documentTextPipeline: pipeline,
+    helpers,
+    registry,
+  };
+}
+
+function createMcpServer({ runtime, config, fetchImpl, documentTextPipeline, ocrProvider }) {
+  const resolvedRuntime = runtime || createMcpRuntime({
+    config,
+    fetchImpl,
+    documentTextPipeline,
+    ocrProvider,
+  });
+  const { registry } = resolvedRuntime;
 
   const server = new Server(
     {
@@ -46,19 +65,29 @@ function createMcpServer({ config, fetchImpl, documentTextPipeline, ocrProvider 
     })),
   }));
 
-  server.setRequestHandler(CallToolRequestSchema, async (request) => {
+  server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
     try {
-      const payload = await registry.execute(request.params.name, request.params.arguments || {});
-      return helpers.toMcpTextResult(payload, false);
+      const payload = await registry.execute(
+        request.params.name,
+        request.params.arguments || {},
+        {
+          authInfo: extra?.authInfo,
+          requestInfo: extra?.requestInfo,
+          sessionId: extra?.sessionId,
+        },
+      );
+      return resolvedRuntime.helpers.toMcpTextResult(payload, false);
     } catch (error) {
-      return helpers.toMcpTextResult(helpers.toErrorEnvelope(error), true);
+      return resolvedRuntime.helpers.toMcpTextResult(resolvedRuntime.helpers.toErrorEnvelope(error), true);
     }
   });
 
   server.registry = registry;
+  server.runtime = resolvedRuntime;
   return server;
 }
 
 module.exports = {
+  createMcpRuntime,
   createMcpServer,
 };

@@ -1,4 +1,4 @@
-const SERVER_VERSION = '2.2.0';
+const SERVER_VERSION = '3.0.0';
 const DEFAULT_TIMEOUT_MS = 30000;
 const DEFAULT_PAGE = 1;
 const DEFAULT_PAGE_SIZE = 10;
@@ -7,6 +7,7 @@ const DEFAULT_MAX_CHARS = 6000;
 const MAX_MAX_CHARS = 12000;
 const PREVIEW_MAX_CHARS = 300;
 const EVENT_DATE_FALLBACK_MAX_PAGES = 20;
+const TASK_CURRENT_USER_SCAN_MAX_PAGES = 20;
 const MAX_DOCUMENT_BYTES = 50 * 1024 * 1024;
 const DOCUMENT_CHUNK_TARGET_CHARS = 4000;
 const DOCUMENT_CHUNK_OVERLAP_CHARS = 400;
@@ -62,6 +63,7 @@ const CANONICAL_TOOL_NAMES = [
   'task_search',
   'task_get',
   'task_list_on_date',
+  'task_list_current_user_on_date',
   'event_search',
   'event_get',
   'event_list_by_date',
@@ -83,6 +85,7 @@ module.exports = {
   DEFAULT_PAGE_SIZE,
   DEFAULT_TIMEOUT_MS,
   EVENT_DATE_FALLBACK_MAX_PAGES,
+  TASK_CURRENT_USER_SCAN_MAX_PAGES,
   DOCUMENT_CHUNK_BOUNDARY_LOOKBACK_CHARS,
   DOCUMENT_CHUNK_OVERLAP_CHARS,
   DOCUMENT_CHUNK_TARGET_CHARS,

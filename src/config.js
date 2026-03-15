@@ -32,6 +32,19 @@ function parseTimeout(rawTimeout) {
   return timeoutMs;
 }
 
+function parseHttpPort(rawPort) {
+  if (rawPort === undefined || rawPort === null || rawPort === '') {
+    return 3001;
+  }
+
+  const port = Number.parseInt(String(rawPort), 10);
+  if (!Number.isInteger(port) || port <= 0 || port > 65535) {
+    throw new Error('MCP_HTTP_PORT must be an integer between 1 and 65535');
+  }
+
+  return port;
+}
+
 function parseOcrProvider(rawProvider) {
   const provider = (rawProvider || 'none').trim().toLowerCase();
 
@@ -49,6 +62,11 @@ function normalizeOptionalString(value) {
 
   const normalized = String(value).trim();
   return normalized || null;
+}
+
+function normalizeHeaderName(rawHeader, fallback = 'x-legalserver-user-email') {
+  const headerName = normalizeOptionalString(rawHeader) || fallback;
+  return headerName.toLowerCase();
 }
 
 function loadConfig(env) {
@@ -72,13 +90,18 @@ function loadConfig(env) {
     documentOcrModel: normalizeOptionalString(env.DOCUMENT_OCR_MODEL) || 'gemini-2.5-flash',
     googleCloudProject,
     googleCloudLocation: normalizeOptionalString(env.GOOGLE_CLOUD_LOCATION) || 'global',
+    httpHost: normalizeOptionalString(env.MCP_HTTP_HOST) || '127.0.0.1',
+    httpPort: parseHttpPort(env.MCP_HTTP_PORT),
+    userEmailHeader: normalizeHeaderName(env.LEGALSERVER_USER_EMAIL_HEADER),
   };
 }
 
 module.exports = {
   loadConfig,
+  normalizeHeaderName,
   normalizeOptionalString,
   normalizeBaseUrl,
   parseOcrProvider,
+  parseHttpPort,
   parseTimeout,
 };

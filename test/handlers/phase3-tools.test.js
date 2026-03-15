@@ -24,6 +24,9 @@ function createRegistry(responses) {
           throw new Error('documentTextPipeline should not be used in phase 3 handler tests');
         },
       },
+      config: {
+        userEmailHeader: 'x-legalserver-user-email',
+      },
     }),
   };
 }
@@ -82,6 +85,21 @@ const sampleTask = {
     user_name: 'Creator User',
   },
   created_date: '2026-03-10',
+};
+
+const sampleCurrentUserTask = {
+  ...sampleTask,
+  id: 102,
+  task_uuid: 'task-uuid-current-user',
+  title: 'Current user filing',
+  users: {
+    all_values: 'Jordan Staff',
+    individual_values: [{
+      user_id: 404,
+      user_uuid: 'user-uuid-1',
+      user_name: 'Jordan Staff',
+    }],
+  },
 };
 
 const sampleEvent = {
@@ -308,6 +326,110 @@ test('task_search and task_list_on_date send the documented query shape and map 
   const secondUrl = new URL(calls[1].url);
   assert.equal(secondUrl.searchParams.get('list_date'), '2026-03-12');
   assert.equal(secondUrl.searchParams.get('completed'), 'false');
+});
+
+test('task_list_current_user_on_date resolves the request user by email and filters tasks locally', async () => {
+  const { registry, calls } = createRegistry([
+    jsonResponse(200, makePaginated([sampleUser], 1, 25, 1, 1)),
+    jsonResponse(200, makePaginated([sampleTask, sampleCurrentUserTask], 1, 25, 1, 2)),
+  ]);
+
+  const payload = await registry.execute(
+    'task_list_current_user_on_date',
+    { date: '2026-03-12' },
+    {
+      requestInfo: {
+        headers: {
+          'x-legalserver-user-email': 'JORDAN@EXAMPLE.ORG',
+        },
+      },
+    },
+  );
+
+  assert.deepEqual(payload.data.map((item) => item.task_uuid), ['task-uuid-current-user']);
+  assert.equal(payload.truncated, false);
+
+  const userLookupUrl = new URL(calls[0].url);
+  assert.equal(userLookupUrl.pathname, '/api/v1/users');
+  assert.equal(userLookupUrl.searchParams.get('email'), 'JORDAN@EXAMPLE.ORG');
+
+  const taskUrl = new URL(calls[1].url);
+  assert.equal(taskUrl.searchParams.get('list_date'), '2026-03-12');
+  assert.equal(taskUrl.searchParams.get('completed'), 'false');
+});
+
+test('task_list_current_user_on_date fails when the request-scoped email header is missing', async () => {
+  const { registry } = createRegistry([]);
+
+  await assert.rejects(
+    () => registry.execute('task_list_current_user_on_date', { date: '2026-03-12' }),
+    (error) => {
+      assert.equal(error.errorCode, 'missing_user_context');
+      assert.equal(error.status, 400);
+      return true;
+    },
+  );
+});
+
+test('task_list_current_user_on_date returns user_context_unresolved when no user matches the email', async () => {
+  const { registry } = createRegistry([
+    jsonResponse(200, makePaginated([], 1, 25, 0, 0)),
+  ]);
+
+  await assert.rejects(
+    () => registry.execute(
+      'task_list_current_user_on_date',
+      { date: '2026-03-12' },
+      {
+        requestInfo: {
+          headers: {
+            'x-legalserver-user-email': 'missing@example.org',
+          },
+        },
+      },
+    ),
+    (error) => {
+      assert.equal(error.errorCode, 'user_context_unresolved');
+      assert.equal(error.status, 404);
+      return true;
+    },
+  );
+});
+
+test('task_list_current_user_on_date marks results truncated when the user filter scan window is incomplete', async () => {
+  const { registry } = createRegistry([
+    jsonResponse(200, makePaginated([sampleUser], 1, 25, 1, 1)),
+    ...Array.from({ length: 20 }, (_, index) => jsonResponse(
+      200,
+      makePaginated(
+        [{
+          ...sampleCurrentUserTask,
+          id: 500 + index,
+          task_uuid: `task-window-${index}`,
+        }],
+        index + 1,
+        25,
+        21,
+        21,
+      ),
+    )),
+  ]);
+
+  const payload = await registry.execute(
+    'task_list_current_user_on_date',
+    { date: '2026-03-12' },
+    {
+      requestInfo: {
+        headers: {
+          'x-legalserver-user-email': 'jordan@example.org',
+        },
+      },
+    },
+  );
+
+  assert.equal(payload.truncated, true);
+  assert.equal(payload.warnings.length, 1);
+  assert.match(payload.warnings[0], /stopped after 20 upstream task pages/i);
 });
 
 test('task_get returns phase 3 detail fields', async () => {

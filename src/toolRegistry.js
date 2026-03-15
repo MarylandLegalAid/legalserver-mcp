@@ -18,7 +18,7 @@ function createToolRegistry(context) {
   ];
   const toolMap = new Map(tools.map((tool) => [tool.name, tool]));
 
-  async function execute(name, args) {
+  async function execute(name, args, invocationContext = {}) {
     const tool = toolMap.get(name);
     if (!tool) {
       throw new Error(`Unknown tool: ${name}`);
@@ -26,6 +26,7 @@ function createToolRegistry(context) {
 
     return tool.handler({
       ...context,
+      ...invocationContext,
       args: args || {},
     });
   }

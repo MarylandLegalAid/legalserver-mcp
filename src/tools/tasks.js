@@ -1,4 +1,8 @@
-const { DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE } = require('../constants');
+const {
+  DEFAULT_PAGE_SIZE,
+  MAX_PAGE_SIZE,
+  TASK_CURRENT_USER_SCAN_MAX_PAGES,
+} = require('../constants');
 const { isoDateProperty, pageProperties, uuidProperty } = require('./shared/schemas');
 const {
   normalizeModuleDetail,
@@ -6,6 +10,7 @@ const {
   normalizeUserRef,
   runPaginatedSearch,
 } = require('./shared/globalDiscovery');
+const { resolveCurrentUser } = require('./shared/currentUser');
 
 function mapTaskSummary(record, helpers) {
   return {
@@ -36,6 +41,79 @@ function mapTaskDetail(record, helpers) {
     statute_of_limitations: record.statute_of_limitations ?? null,
     module: normalizeModuleDetail(record.module),
   };
+}
+
+function taskBelongsToUser(record, currentUser, helpers) {
+  const assignedUsers = helpers.normalizeArrayValue(record.users).map(normalizeUserRef).filter(Boolean);
+
+  return assignedUsers.some((assignedUser) => (
+    (currentUser.user_uuid && assignedUser.user_uuid === currentUser.user_uuid)
+    || (
+      currentUser.id !== null
+      && currentUser.id !== undefined
+      && assignedUser.id === currentUser.id
+    )
+  ));
+}
+
+async function runCurrentUserTaskListOnDate({ args, client, config, helpers, requestInfo }) {
+  helpers.validateIsoDate(args.date, 'date');
+
+  const currentUser = await resolveCurrentUser({
+    client,
+    config,
+    helpers,
+    requestInfo,
+  });
+
+  const page = helpers.validatePage(args.page);
+  const pageSize = helpers.validatePageSize(args.page_size);
+  const completed = args.completed === undefined ? false : args.completed;
+  const warnings = [];
+  const matches = [];
+  let scannedAllPages = false;
+  let totalSourcePages = 0;
+
+  for (let scanPage = 1; scanPage <= TASK_CURRENT_USER_SCAN_MAX_PAGES; scanPage += 1) {
+    const response = await client.getJson('/api/v1/tasks', {
+      query: {
+        page_number: scanPage,
+        page_size: MAX_PAGE_SIZE,
+        list_date: args.date,
+        completed,
+        deadline: args.deadline,
+      },
+    });
+
+    const records = Array.isArray(response.data) ? response.data : [];
+    totalSourcePages = response.totalPages || 0;
+
+    for (const record of records) {
+      if (taskBelongsToUser(record, currentUser, helpers)) {
+        matches.push(mapTaskSummary(record, helpers));
+      }
+    }
+
+    if (totalSourcePages === 0 || scanPage >= totalSourcePages) {
+      scannedAllPages = true;
+      break;
+    }
+  }
+
+  const paged = helpers.paginateArray(matches, page, pageSize);
+  if (!scannedAllPages) {
+    warnings.push(`The scan stopped after ${TASK_CURRENT_USER_SCAN_MAX_PAGES} upstream task pages, so counts and next-page hints reflect the scanned window only.`);
+  }
+
+  return helpers.successEnvelope({
+    data: paged.items,
+    page: paged.page,
+    pageSize: paged.pageSize,
+    totalRecords: paged.totalRecords,
+    totalPages: paged.totalPages,
+    truncated: !scannedAllPages,
+    warnings,
+  });
 }
 
 function createTaskTools() {
@@ -164,6 +242,39 @@ function createTaskTools() {
           mapper: mapTaskSummary,
         });
       },
+    },
+    {
+      name: 'task_list_current_user_on_date',
+      description: 'List tasks assigned to the current request user on one LegalServer list date.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          date: isoDateProperty('Task list date in YYYY-MM-DD format.'),
+          ...pageProperties(),
+          completed: {
+            type: 'boolean',
+            default: false,
+            description: 'Set true to include completed tasks for that date.',
+          },
+          deadline: {
+            type: 'boolean',
+            description: 'Optional task/deadline filter for that date.',
+          },
+        },
+        required: ['date'],
+        additionalProperties: false,
+      },
+      budgetPolicy: {
+        page_size_default: DEFAULT_PAGE_SIZE,
+        page_size_max: MAX_PAGE_SIZE,
+      },
+      handler: ({ args, client, config, helpers, requestInfo }) => runCurrentUserTaskListOnDate({
+        args,
+        client,
+        config,
+        helpers,
+        requestInfo,
+      }),
     },
   ];
 }

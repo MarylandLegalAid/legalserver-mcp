@@ -2,29 +2,20 @@
 
 require('dotenv').config({ quiet: true });
 
-const { StdioServerTransport } = require('@modelcontextprotocol/sdk/server/stdio.js');
 const { loadConfig } = require('./src/config');
-const { createMcpServer } = require('./src/mcpServer');
+const { startHttpServer } = require('./src/httpServer');
 
 async function main() {
   const config = loadConfig(process.env);
-  const server = createMcpServer({
+  const { server } = await startHttpServer({
     config,
     fetchImpl: global.fetch,
   });
+  console.error(`legalserver-mcp listening on http://${config.httpHost}:${config.httpPort}/mcp`);
 
-  const transport = new StdioServerTransport();
-  await server.connect(transport);
-  process.stdin.resume();
-  const keepAlive = setInterval(() => {}, 1 << 30);
-  await new Promise((resolve) => {
-    function finish() {
-      clearInterval(keepAlive);
-      resolve();
-    }
-
-    process.stdin.once('close', finish);
-    process.stdin.once('end', finish);
+  await new Promise((resolve, reject) => {
+    server.once('close', resolve);
+    server.once('error', reject);
   });
 }
 
