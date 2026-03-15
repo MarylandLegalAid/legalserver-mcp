@@ -13,7 +13,37 @@ async function main() {
   });
   console.error(`legalserver-mcp listening on http://${config.httpHost}:${config.httpPort}/mcp`);
 
-  await new Promise((resolve, reject) => {
+  let shuttingDown = false;
+
+  const shutdown = async (signal) => {
+    if (shuttingDown) {
+      return;
+    }
+
+    shuttingDown = true;
+    console.error(`legalserver-mcp received ${signal}, shutting down`);
+    await new Promise((resolve) => server.close(resolve));
+  };
+
+  process.on('SIGINT', () => {
+    shutdown('SIGINT')
+      .then(() => process.exit(0))
+      .catch((error) => {
+        console.error(error instanceof Error ? error.message : String(error));
+        process.exit(1);
+      });
+  });
+
+  process.on('SIGTERM', () => {
+    shutdown('SIGTERM')
+      .then(() => process.exit(0))
+      .catch((error) => {
+        console.error(error instanceof Error ? error.message : String(error));
+        process.exit(1);
+      });
+  });
+
+  return new Promise((resolve, reject) => {
     server.once('close', resolve);
     server.once('error', reject);
   });

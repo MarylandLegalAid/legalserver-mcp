@@ -1,31 +1,50 @@
 const assert = require('node:assert/strict');
 const { Client } = require('@modelcontextprotocol/sdk/client/index.js');
-const { InMemoryTransport } = require('@modelcontextprotocol/sdk/inMemory.js');
+const { StreamableHTTPClientTransport } = require('@modelcontextprotocol/sdk/client/streamableHttp.js');
 const { CANONICAL_TOOL_NAMES } = require('../src/constants');
-const { createMcpServer } = require('../src/mcpServer');
+const { createHttpApp } = require('../src/httpServer');
+
+function startServer(app) {
+  return new Promise((resolve, reject) => {
+    const server = app.listen(0, '127.0.0.1');
+    server.once('error', reject);
+    server.once('listening', () => {
+      server.removeListener('error', reject);
+      resolve(server);
+    });
+  });
+}
 
 async function main() {
-  const server = createMcpServer({
+  const { app } = createHttpApp({
     config: {
       baseUrl: 'https://example.legalserver.test/',
       bearerToken: 'smoke-token',
       timeoutMs: 30000,
+      documentOcrProvider: 'none',
+      documentOcrModel: 'gemini-2.5-flash',
+      googleCloudProject: null,
+      googleCloudLocation: 'global',
+      httpHost: '127.0.0.1',
+      httpPort: 3001,
+      allowedHosts: null,
+      sharedSecret: null,
+      sharedSecretHeader: 'x-legalserver-mcp-secret',
+      userEmailHeader: 'x-legalserver-user-email',
     },
     fetchImpl: async () => {
       throw new Error('Smoke test must not call LegalServer');
     },
   });
-
-  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+  const server = await startServer(app);
+  const address = server.address();
+  const clientTransport = new StreamableHTTPClientTransport(new URL(`http://127.0.0.1:${address.port}/mcp`));
   const client = new Client({
     name: 'legalserver-mcp-smoke',
     version: '1.0.0',
   });
 
-  await Promise.all([
-    server.connect(serverTransport),
-    client.connect(clientTransport),
-  ]);
+  await client.connect(clientTransport);
 
   const result = await client.listTools();
   const toolNames = result.tools.map((tool) => tool.name).sort();
@@ -33,7 +52,8 @@ async function main() {
 
   console.log(`Smoke test passed: ${toolNames.length} tools advertised.`);
 
-  await clientTransport.close();
+  await client.close();
+  server.close();
 }
 
 main().catch((error) => {

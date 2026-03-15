@@ -4,6 +4,7 @@ const {
   loadConfig,
   normalizeBaseUrl,
   normalizeHeaderName,
+  parseAllowedHosts,
   parseHttpPort,
   parseOcrProvider,
   parseTimeout,
@@ -35,10 +36,28 @@ test('HTTP config defaults and validates values', () => {
 
   assert.equal(config.httpHost, '127.0.0.1');
   assert.equal(config.httpPort, 3001);
+  assert.equal(config.allowedHosts, null);
+  assert.equal(config.sharedSecret, null);
+  assert.equal(config.sharedSecretHeader, 'x-legalserver-mcp-secret');
   assert.equal(config.userEmailHeader, 'x-legalserver-user-email');
   assert.equal(parseHttpPort('8080'), 8080);
+  assert.deepEqual(parseAllowedHosts(' legalserver-mcp, localhost , legalserver-mcp '), ['legalserver-mcp', 'localhost']);
   assert.equal(normalizeHeaderName(' X-Custom-User-Email '), 'x-custom-user-email');
   assert.throws(() => parseHttpPort('70000'), /MCP_HTTP_PORT/);
+});
+
+test('HTTP config parses optional host filtering and shared secret settings', () => {
+  const config = loadConfig({
+    LEGALSERVER_BASE_URL: 'https://example.legalserver.org/',
+    LEGALSERVER_BEARER_TOKEN: 'token',
+    MCP_ALLOWED_HOSTS: 'legalserver-mcp, localhost,127.0.0.1',
+    MCP_SHARED_SECRET: 'super-secret',
+    MCP_SHARED_SECRET_HEADER: ' X-LegalServer-Mcp-Secret ',
+  });
+
+  assert.deepEqual(config.allowedHosts, ['legalserver-mcp', 'localhost', '127.0.0.1']);
+  assert.equal(config.sharedSecret, 'super-secret');
+  assert.equal(config.sharedSecretHeader, 'x-legalserver-mcp-secret');
 });
 
 test('OCR config defaults and validates provider-specific requirements', () => {

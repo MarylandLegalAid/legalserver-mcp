@@ -1,8 +1,9 @@
+const http = require('node:http');
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { Client } = require('@modelcontextprotocol/sdk/client/index.js');
 const { StreamableHTTPClientTransport } = require('@modelcontextprotocol/sdk/client/streamableHttp.js');
-const { CANONICAL_TOOL_NAMES } = require('../../src/constants');
+const { CANONICAL_TOOL_NAMES, SERVER_VERSION } = require('../../src/constants');
 const { createHttpApp } = require('../../src/httpServer');
 const { jsonResponse } = require('../support/mockFetch');
 
@@ -20,6 +21,177 @@ function startServer(app) {
     });
   });
 }
+
+function createBaseConfig(overrides = {}) {
+  return {
+    baseUrl: 'https://example.legalserver.org/',
+    bearerToken: 'token',
+    timeoutMs: 30000,
+    documentOcrProvider: 'none',
+    documentOcrModel: 'gemini-2.5-flash',
+    googleCloudProject: null,
+    googleCloudLocation: 'global',
+    httpHost: '127.0.0.1',
+    httpPort: 3001,
+    allowedHosts: null,
+    sharedSecret: null,
+    sharedSecretHeader: 'x-legalserver-mcp-secret',
+    userEmailHeader: 'x-legalserver-user-email',
+    ...overrides,
+  };
+}
+
+function initializePayload() {
+  return {
+    jsonrpc: '2.0',
+    id: 1,
+    method: 'initialize',
+    params: {
+      protocolVersion: '2025-11-25',
+      capabilities: {},
+      clientInfo: {
+        name: 'legalserver-mcp-http-test',
+        version: '1.0.0',
+      },
+    },
+  };
+}
+
+function requestWithHost({ port, hostHeader, path = '/healthz', method = 'GET' }) {
+  return new Promise((resolve, reject) => {
+    const request = http.request({
+      host: '127.0.0.1',
+      port,
+      path,
+      method,
+      headers: {
+        Host: hostHeader,
+      },
+    }, (response) => {
+      let body = '';
+      response.setEncoding('utf8');
+      response.on('data', (chunk) => {
+        body += chunk;
+      });
+      response.on('end', () => {
+        resolve({ response, body });
+      });
+    });
+
+    request.once('error', reject);
+    request.end();
+  });
+}
+
+test('HTTP server exposes an unauthenticated health endpoint', async () => {
+  const { app } = createHttpApp({
+    config: createBaseConfig(),
+    fetchImpl: async () => {
+      throw new Error('healthz must not call LegalServer');
+    },
+  });
+  const server = await startServer(app);
+  const address = server.address();
+
+  try {
+    const response = await fetch(`http://127.0.0.1:${address.port}/healthz`);
+    const payload = await response.json();
+
+    assert.equal(response.status, 200);
+    assert.deepEqual(payload, {
+      ok: true,
+      service: 'legalserver-mcp',
+      version: SERVER_VERSION,
+    });
+  } finally {
+    server.close();
+  }
+});
+
+test('HTTP server rejects MCP calls when the shared secret header is missing', async () => {
+  const { app } = createHttpApp({
+    config: createBaseConfig({
+      sharedSecret: 'super-secret',
+    }),
+    fetchImpl: async () => {
+      throw new Error('shared-secret guard must run before LegalServer calls');
+    },
+  });
+  const server = await startServer(app);
+  const address = server.address();
+
+  try {
+    const response = await fetch(`http://127.0.0.1:${address.port}/mcp`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify(initializePayload()),
+    });
+    const payload = await response.json();
+
+    assert.equal(response.status, 401);
+    assert.equal(payload.error_code, 'missing_shared_secret');
+  } finally {
+    server.close();
+  }
+});
+
+test('HTTP server rejects MCP calls when the shared secret header is invalid', async () => {
+  const { app } = createHttpApp({
+    config: createBaseConfig({
+      sharedSecret: 'super-secret',
+    }),
+    fetchImpl: async () => {
+      throw new Error('shared-secret guard must run before LegalServer calls');
+    },
+  });
+  const server = await startServer(app);
+  const address = server.address();
+
+  try {
+    const response = await fetch(`http://127.0.0.1:${address.port}/mcp`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        'x-legalserver-mcp-secret': 'wrong-secret',
+      },
+      body: JSON.stringify(initializePayload()),
+    });
+    const payload = await response.json();
+
+    assert.equal(response.status, 403);
+    assert.equal(payload.error_code, 'invalid_shared_secret');
+  } finally {
+    server.close();
+  }
+});
+
+test('HTTP server rejects disallowed Host headers', async () => {
+  const { app } = createHttpApp({
+    config: createBaseConfig({
+      allowedHosts: ['legalserver-mcp', '127.0.0.1'],
+    }),
+    fetchImpl: async () => {
+      throw new Error('host filter must run before LegalServer calls');
+    },
+  });
+  const server = await startServer(app);
+  const address = server.address();
+
+  try {
+    const { response, body } = await requestWithHost({
+      port: address.port,
+      hostHeader: 'unexpected-host',
+    });
+    const payload = JSON.parse(body);
+
+    assert.equal(response.statusCode, 403);
+    assert.equal(payload.error.message, 'Invalid Host: unexpected-host');
+  } finally {
+    server.close();
+  }
+});
 
 test('HTTP server lists canonical tools and supports current-user task lookup', async () => {
   const fetchCalls = [];
@@ -100,18 +272,10 @@ test('HTTP server lists canonical tools and supports current-user task lookup', 
   };
 
   const { app } = createHttpApp({
-    config: {
-      baseUrl: 'https://example.legalserver.org/',
-      bearerToken: 'token',
-      timeoutMs: 30000,
-      documentOcrProvider: 'none',
-      documentOcrModel: 'gemini-2.5-flash',
-      googleCloudProject: null,
-      googleCloudLocation: 'global',
-      httpHost: '127.0.0.1',
-      httpPort: 3001,
-      userEmailHeader: 'x-legalserver-user-email',
-    },
+    config: createBaseConfig({
+      allowedHosts: ['127.0.0.1'],
+      sharedSecret: 'super-secret',
+    }),
     fetchImpl,
   });
   const server = await startServer(app);
@@ -122,6 +286,7 @@ test('HTTP server lists canonical tools and supports current-user task lookup', 
       requestInit: {
         headers: {
           'X-LegalServer-User-Email': 'jordan@example.org',
+          'X-LegalServer-Mcp-Secret': 'super-secret',
         },
       },
     },

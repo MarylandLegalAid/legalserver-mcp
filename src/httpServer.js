@@ -1,5 +1,7 @@
 const { createMcpExpressApp } = require('@modelcontextprotocol/sdk/server/express.js');
 const { StreamableHTTPServerTransport } = require('@modelcontextprotocol/sdk/server/streamableHttp.js');
+const { SERVER_VERSION } = require('./constants');
+const { ToolError, toErrorEnvelope } = require('./helpers/errors');
 const { createMcpRuntime, createMcpServer } = require('./mcpServer');
 
 function writeMethodNotAllowed(res) {
@@ -13,6 +15,35 @@ function writeMethodNotAllowed(res) {
   }));
 }
 
+function writeHttpError(res, status, errorCode, message) {
+  res.status(status).json(toErrorEnvelope(new ToolError({
+    errorCode,
+    message,
+    status,
+  })));
+}
+
+function createSharedSecretMiddleware(config) {
+  if (!config.sharedSecret) {
+    return (_req, _res, next) => next();
+  }
+
+  return (req, res, next) => {
+    const providedSecret = req.get(config.sharedSecretHeader);
+    if (!providedSecret || !providedSecret.trim()) {
+      writeHttpError(res, 401, 'missing_shared_secret', 'Missing required MCP shared secret header.');
+      return;
+    }
+
+    if (providedSecret !== config.sharedSecret) {
+      writeHttpError(res, 403, 'invalid_shared_secret', 'Invalid MCP shared secret header.');
+      return;
+    }
+
+    next();
+  };
+}
+
 function createHttpApp({ runtime, config, fetchImpl, documentTextPipeline, ocrProvider }) {
   const resolvedRuntime = runtime || createMcpRuntime({
     config,
@@ -20,9 +51,21 @@ function createHttpApp({ runtime, config, fetchImpl, documentTextPipeline, ocrPr
     documentTextPipeline,
     ocrProvider,
   });
-  const app = createMcpExpressApp({ host: resolvedRuntime.config.httpHost });
+  const app = createMcpExpressApp({
+    host: resolvedRuntime.config.httpHost,
+    allowedHosts: resolvedRuntime.config.allowedHosts || undefined,
+  });
+  const sharedSecretMiddleware = createSharedSecretMiddleware(resolvedRuntime.config);
 
-  app.post('/mcp', async (req, res) => {
+  app.get('/healthz', (_req, res) => {
+    res.status(200).json({
+      ok: true,
+      service: 'legalserver-mcp',
+      version: SERVER_VERSION,
+    });
+  });
+
+  app.post('/mcp', sharedSecretMiddleware, async (req, res) => {
     const server = createMcpServer({ runtime: resolvedRuntime });
     const transport = new StreamableHTTPServerTransport({
       sessionIdGenerator: undefined,

@@ -69,6 +69,24 @@ function normalizeHeaderName(rawHeader, fallback = 'x-legalserver-user-email') {
   return headerName.toLowerCase();
 }
 
+function parseAllowedHosts(rawAllowedHosts) {
+  const normalized = normalizeOptionalString(rawAllowedHosts);
+  if (!normalized) {
+    return null;
+  }
+
+  const allowedHosts = normalized
+    .split(',')
+    .map((value) => value.trim().toLowerCase())
+    .filter(Boolean);
+
+  if (allowedHosts.length === 0) {
+    return null;
+  }
+
+  return [...new Set(allowedHosts)];
+}
+
 function loadConfig(env) {
   const bearerToken = env.LEGALSERVER_BEARER_TOKEN;
   if (!bearerToken) {
@@ -92,12 +110,16 @@ function loadConfig(env) {
     googleCloudLocation: normalizeOptionalString(env.GOOGLE_CLOUD_LOCATION) || 'global',
     httpHost: normalizeOptionalString(env.MCP_HTTP_HOST) || '127.0.0.1',
     httpPort: parseHttpPort(env.MCP_HTTP_PORT),
+    allowedHosts: parseAllowedHosts(env.MCP_ALLOWED_HOSTS),
+    sharedSecret: normalizeOptionalString(env.MCP_SHARED_SECRET),
+    sharedSecretHeader: normalizeHeaderName(env.MCP_SHARED_SECRET_HEADER, 'x-legalserver-mcp-secret'),
     userEmailHeader: normalizeHeaderName(env.LEGALSERVER_USER_EMAIL_HEADER),
   };
 }
 
 module.exports = {
   loadConfig,
+  parseAllowedHosts,
   normalizeHeaderName,
   normalizeOptionalString,
   normalizeBaseUrl,
