@@ -216,6 +216,8 @@ When LegalServer returns a broken document endpoint, phase 2.5 now surfaces clea
 
 For the production path, run the MCP as a private Docker Compose service on the same network as LibreChat instead of as a host process reached through `host.docker.internal`.
 
+For a full step-by-step walkthrough, see [`docs/librechat-docker-compose-deployment.md`](./docs/librechat-docker-compose-deployment.md).
+
 Example service block:
 
 ```yaml
