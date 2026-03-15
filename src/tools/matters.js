@@ -1,11 +1,13 @@
 const {
   DEFAULT_MAX_CHARS,
   DEFAULT_PAGE_SIZE,
+  MATTER_CURRENT_USER_SCAN_MAX_PAGES,
   MAX_MAX_CHARS,
   MAX_PAGE_SIZE,
   PREVIEW_MAX_CHARS,
 } = require('../constants');
 const { caseUuidProperty, pageProperties } = require('./shared/schemas');
+const { currentUserMatchesUserRef, resolveCurrentUser } = require('./shared/currentUser');
 
 function mapNote(note, helpers) {
   const plainBody = note.is_html ? helpers.htmlToText(note.body) : String(note.body ?? '');
@@ -229,6 +231,138 @@ function mapLitigation(record, helpers) {
   };
 }
 
+function mapCurrentUserMatterSummary(record, matchingAssignments, helpers) {
+  return {
+    case_uuid: helpers.getFirstDefined(record.matter_uuid, record.case_uuid, record.uuid),
+    case_id: record.case_id ?? null,
+    case_number: record.case_number ?? null,
+    case_title: record.case_title ?? null,
+    client_name: helpers.getFirstDefined(record.client_full_name, record.organization_name),
+    case_status: record.case_status ?? null,
+    case_disposition: record.case_disposition ?? null,
+    legal_problem_code: record.legal_problem_code ?? null,
+    case_profile_url: record.case_profile_url ?? null,
+    date_opened: helpers.normalizeDateValue(record.date_opened),
+    date_closed: helpers.normalizeDateValue(record.date_closed),
+    matching_assignments: matchingAssignments.map((assignment) => mapAssignment(assignment, helpers)),
+  };
+}
+
+function isIsoDateLike(value) {
+  return typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value.trim());
+}
+
+function isCurrentAssignment(record, helpers) {
+  const today = new Date().toISOString().slice(0, 10);
+  const startDate = helpers.normalizeDateValue(record.start_date);
+  const endDate = helpers.normalizeDateValue(record.end_date);
+
+  if (isIsoDateLike(startDate) && helpers.compareIsoDates(startDate, today, 'start_date', 'today') > 0) {
+    return false;
+  }
+
+  if (isIsoDateLike(endDate) && helpers.compareIsoDates(endDate, today, 'end_date', 'today') < 0) {
+    return false;
+  }
+
+  return true;
+}
+
+function filterMatchingAssignments(record, helpers, currentUser, currentOnly) {
+  const assignments = Array.isArray(record.assignments) ? record.assignments : [];
+
+  return assignments.filter((assignment) => {
+    if (!currentUserMatchesUserRef(currentUser, assignment.user)) {
+      return false;
+    }
+
+    if (!currentOnly) {
+      return true;
+    }
+
+    return isCurrentAssignment(assignment, helpers);
+  });
+}
+
+async function runCurrentUserMatterList({ args, client, config, helpers, requestInfo }) {
+  const currentUser = await resolveCurrentUser({
+    client,
+    config,
+    helpers,
+    requestInfo,
+  });
+  const page = helpers.validatePage(args.page);
+  const pageSize = helpers.validatePageSize(args.page_size);
+  const currentOnly = args.current_only === undefined ? true : args.current_only;
+  const matches = [];
+  let scannedAllPages = false;
+  let sawAssignmentField = false;
+
+  for (let scanPage = 1; scanPage <= MATTER_CURRENT_USER_SCAN_MAX_PAGES; scanPage += 1) {
+    const response = await client.getJson('/api/v1/matters', {
+      query: {
+        results: 'full',
+        page_number: scanPage,
+        page_size: MAX_PAGE_SIZE,
+        case_disposition: args.case_disposition,
+        legal_problem_code: args.legal_problem_code,
+        'assignments:type': args.assignment_type,
+      },
+    });
+
+    const records = Array.isArray(response.data) ? response.data : [];
+    if (records.some((record) => Object.prototype.hasOwnProperty.call(record, 'assignments'))) {
+      sawAssignmentField = true;
+    } else if (records.length > 0) {
+      throw new helpers.ToolError({
+        errorCode: 'assignment_visibility_unavailable',
+        message: 'Matter search results did not include assignments. This tool requires a LegalServer API role that exposes assignment arrays in /api/v1/matters full results.',
+        status: 412,
+      });
+    }
+
+    for (const record of records) {
+      const matchingAssignments = filterMatchingAssignments(record, helpers, currentUser, currentOnly);
+      if (matchingAssignments.length === 0) {
+        continue;
+      }
+
+      matches.push(mapCurrentUserMatterSummary(record, matchingAssignments, helpers));
+    }
+
+    const totalPages = response.totalPages || 0;
+    if (totalPages === 0 || scanPage >= totalPages) {
+      scannedAllPages = true;
+      break;
+    }
+  }
+
+  if (!sawAssignmentField && matches.length === 0) {
+    throw new helpers.ToolError({
+      errorCode: 'assignment_visibility_unavailable',
+      message: 'Matter search results did not include assignments. This tool requires a LegalServer API role that exposes assignment arrays in /api/v1/matters full results.',
+      status: 412,
+    });
+  }
+
+  const paged = helpers.paginateArray(matches, page, pageSize);
+  const warnings = [];
+
+  if (!scannedAllPages) {
+    warnings.push(`The scan stopped after ${MATTER_CURRENT_USER_SCAN_MAX_PAGES} upstream matter pages, so counts and next-page hints reflect the scanned window only.`);
+  }
+
+  return helpers.successEnvelope({
+    data: paged.items,
+    page: paged.page,
+    pageSize: paged.pageSize,
+    totalRecords: paged.totalRecords,
+    totalPages: paged.totalPages,
+    truncated: !scannedAllPages,
+    warnings,
+  });
+}
+
 async function apiListHandler({ args, client, helpers, queryBuilder, pathTemplate, pathParams, mapper, warningsFactory, postProcess }) {
   const page = helpers.validatePage(args.page);
   const pageSize = helpers.validatePageSize(args.page_size);
@@ -352,6 +486,45 @@ function createMatterTools() {
           next: null,
         });
       },
+    },
+    {
+      name: 'matter_list_current_user',
+      description: 'List matters assigned to the current request user.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          ...pageProperties(),
+          case_disposition: {
+            type: 'string',
+            description: 'Optional LegalServer case disposition filter.',
+          },
+          legal_problem_code: {
+            type: 'string',
+            description: 'Optional legal problem code filter.',
+          },
+          assignment_type: {
+            type: 'string',
+            description: 'Optional assignment type filter mapped to the matter search assignments:type key.',
+          },
+          current_only: {
+            type: 'boolean',
+            default: true,
+            description: 'Set false to include historical assignments that are no longer current.',
+          },
+        },
+        additionalProperties: false,
+      },
+      budgetPolicy: {
+        page_size_default: DEFAULT_PAGE_SIZE,
+        page_size_max: MAX_PAGE_SIZE,
+      },
+      handler: ({ args, client, config, helpers, requestInfo }) => runCurrentUserMatterList({
+        args,
+        client,
+        config,
+        helpers,
+        requestInfo,
+      }),
     },
     {
       name: 'matter_list_notes',

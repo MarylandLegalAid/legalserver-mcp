@@ -1,4 +1,5 @@
 const {
+  CURRENT_USER_RANGE_MAX_DAYS,
   DEFAULT_PAGE_SIZE,
   MAX_PAGE_SIZE,
   TASK_CURRENT_USER_SCAN_MAX_PAGES,
@@ -10,7 +11,7 @@ const {
   normalizeUserRef,
   runPaginatedSearch,
 } = require('./shared/globalDiscovery');
-const { resolveCurrentUser } = require('./shared/currentUser');
+const { currentUserMatchesUserRef, resolveCurrentUser } = require('./shared/currentUser');
 
 function mapTaskSummary(record, helpers) {
   return {
@@ -44,32 +45,35 @@ function mapTaskDetail(record, helpers) {
 }
 
 function taskBelongsToUser(record, currentUser, helpers) {
-  const assignedUsers = helpers.normalizeArrayValue(record.users).map(normalizeUserRef).filter(Boolean);
-
-  return assignedUsers.some((assignedUser) => (
-    (currentUser.user_uuid && assignedUser.user_uuid === currentUser.user_uuid)
-    || (
-      currentUser.id !== null
-      && currentUser.id !== undefined
-      && assignedUser.id === currentUser.id
-    )
+  return helpers.normalizeArrayValue(record.users).some((assignedUser) => (
+    currentUserMatchesUserRef(currentUser, assignedUser)
   ));
 }
 
-async function runCurrentUserTaskListOnDate({ args, client, config, helpers, requestInfo }) {
-  helpers.validateIsoDate(args.date, 'date');
+function compareTaskSummaries(left, right) {
+  const leftListDate = left.list_date || '';
+  const rightListDate = right.list_date || '';
+  if (leftListDate !== rightListDate) {
+    return leftListDate.localeCompare(rightListDate);
+  }
 
-  const currentUser = await resolveCurrentUser({
-    client,
-    config,
-    helpers,
-    requestInfo,
-  });
+  const leftDueDate = left.due_date || '9999-12-31';
+  const rightDueDate = right.due_date || '9999-12-31';
+  if (leftDueDate !== rightDueDate) {
+    return leftDueDate.localeCompare(rightDueDate);
+  }
 
-  const page = helpers.validatePage(args.page);
-  const pageSize = helpers.validatePageSize(args.page_size);
-  const completed = args.completed === undefined ? false : args.completed;
-  const warnings = [];
+  return String(left.title || '').localeCompare(String(right.title || ''));
+}
+
+async function scanCurrentUserTasksOnDate({
+  date,
+  completed,
+  deadline,
+  client,
+  helpers,
+  currentUser,
+}) {
   const matches = [];
   let scannedAllPages = false;
   let totalSourcePages = 0;
@@ -79,9 +83,9 @@ async function runCurrentUserTaskListOnDate({ args, client, config, helpers, req
       query: {
         page_number: scanPage,
         page_size: MAX_PAGE_SIZE,
-        list_date: args.date,
+        list_date: date,
         completed,
-        deadline: args.deadline,
+        deadline,
       },
     });
 
@@ -100,10 +104,18 @@ async function runCurrentUserTaskListOnDate({ args, client, config, helpers, req
     }
   }
 
-  const paged = helpers.paginateArray(matches, page, pageSize);
-  if (!scannedAllPages) {
-    warnings.push(`The scan stopped after ${TASK_CURRENT_USER_SCAN_MAX_PAGES} upstream task pages, so counts and next-page hints reflect the scanned window only.`);
-  }
+  return {
+    matches,
+    scannedAllPages,
+    totalSourcePages,
+  };
+}
+
+function buildCurrentUserTaskEnvelope({ helpers, args, matches, truncated, warnings }) {
+  const page = helpers.validatePage(args.page);
+  const pageSize = helpers.validatePageSize(args.page_size);
+  const sortedMatches = [...matches].sort(compareTaskSummaries);
+  const paged = helpers.paginateArray(sortedMatches, page, pageSize);
 
   return helpers.successEnvelope({
     data: paged.items,
@@ -111,7 +123,85 @@ async function runCurrentUserTaskListOnDate({ args, client, config, helpers, req
     pageSize: paged.pageSize,
     totalRecords: paged.totalRecords,
     totalPages: paged.totalPages,
-    truncated: !scannedAllPages,
+    truncated,
+    warnings,
+  });
+}
+
+async function runCurrentUserTaskListOnDate({ args, client, config, helpers, requestInfo }) {
+  const date = helpers.validateIsoDate(args.date, 'date');
+  const currentUser = await resolveCurrentUser({
+    client,
+    config,
+    helpers,
+    requestInfo,
+  });
+  const completed = args.completed === undefined ? false : args.completed;
+  const scan = await scanCurrentUserTasksOnDate({
+    date,
+    completed,
+    deadline: args.deadline,
+    client,
+    helpers,
+    currentUser,
+  });
+  const warnings = [];
+
+  if (!scan.scannedAllPages) {
+    warnings.push(`The scan stopped after ${TASK_CURRENT_USER_SCAN_MAX_PAGES} upstream task pages, so counts and next-page hints reflect the scanned window only.`);
+  }
+
+  return buildCurrentUserTaskEnvelope({
+    helpers,
+    args,
+    matches: scan.matches,
+    truncated: !scan.scannedAllPages,
+    warnings,
+  });
+}
+
+async function runCurrentUserTaskListBetweenDates({ args, client, config, helpers, requestInfo }) {
+  const dateRange = helpers.listInclusiveIsoDates(
+    args.start_date,
+    args.end_date,
+    CURRENT_USER_RANGE_MAX_DAYS,
+  );
+  const currentUser = await resolveCurrentUser({
+    client,
+    config,
+    helpers,
+    requestInfo,
+  });
+  const completed = args.completed === undefined ? false : args.completed;
+  const warnings = [];
+  const truncatedDates = [];
+  const matches = [];
+
+  for (const date of dateRange.dates) {
+    const scan = await scanCurrentUserTasksOnDate({
+      date,
+      completed,
+      deadline: args.deadline,
+      client,
+      helpers,
+      currentUser,
+    });
+
+    matches.push(...scan.matches);
+    if (!scan.scannedAllPages) {
+      truncatedDates.push(date);
+    }
+  }
+
+  if (truncatedDates.length > 0) {
+    warnings.push(`Task scans stopped after ${TASK_CURRENT_USER_SCAN_MAX_PAGES} upstream pages for ${truncatedDates.join(', ')}, so counts and next-page hints reflect only the scanned window for those date(s).`);
+  }
+
+  return buildCurrentUserTaskEnvelope({
+    helpers,
+    args,
+    matches,
+    truncated: truncatedDates.length > 0,
     warnings,
   });
 }
@@ -269,6 +359,40 @@ function createTaskTools() {
         page_size_max: MAX_PAGE_SIZE,
       },
       handler: ({ args, client, config, helpers, requestInfo }) => runCurrentUserTaskListOnDate({
+        args,
+        client,
+        config,
+        helpers,
+        requestInfo,
+      }),
+    },
+    {
+      name: 'task_list_current_user_between_dates',
+      description: 'List tasks assigned to the current request user across an inclusive date range.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          start_date: isoDateProperty(`Inclusive start date in YYYY-MM-DD format. Ranges are capped at ${CURRENT_USER_RANGE_MAX_DAYS} days.`),
+          end_date: isoDateProperty('Inclusive end date in YYYY-MM-DD format.'),
+          ...pageProperties(),
+          completed: {
+            type: 'boolean',
+            default: false,
+            description: 'Set true to include completed tasks in the range.',
+          },
+          deadline: {
+            type: 'boolean',
+            description: 'Optional task/deadline filter for the range.',
+          },
+        },
+        required: ['start_date', 'end_date'],
+        additionalProperties: false,
+      },
+      budgetPolicy: {
+        page_size_default: DEFAULT_PAGE_SIZE,
+        page_size_max: MAX_PAGE_SIZE,
+      },
+      handler: ({ args, client, config, helpers, requestInfo }) => runCurrentUserTaskListBetweenDates({
         args,
         client,
         config,

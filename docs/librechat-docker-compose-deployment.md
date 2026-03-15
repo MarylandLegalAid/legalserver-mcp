@@ -1,13 +1,13 @@
 # Deploying LegalServer MCP Alongside LibreChat With Docker Compose
 
-This guide walks through a complete Docker Compose deployment of the `v3-http-user-scope` branch of `legalserver-mcp` alongside LibreChat.
+This guide walks through a complete Docker Compose deployment of the current HTTP-based `legalserver-mcp` branch alongside LibreChat.
 
-It is written for the setup this branch is designed for:
+It is written for the current deployment model:
 
 - LibreChat runs in Docker Compose
 - this MCP runs as a separate Compose service on the same private network
 - LibreChat connects to the MCP with `type: streamable-http`
-- LibreChat forwards the signed-in user's email so the MCP can support user-scoped tools such as `task_list_current_user_on_date`
+- LibreChat forwards the signed-in user's email so the MCP can support user-scoped tools such as `task_list_current_user_on_date`, `event_list_current_user_on_date`, and `matter_list_current_user`
 - LibreChat also sends a static shared secret so the MCP does not trust any caller on the network by default
 
 If you follow this guide exactly, you should end up with:
@@ -15,7 +15,7 @@ If you follow this guide exactly, you should end up with:
 - a `legalserver-mcp` container running privately inside the same Compose project as LibreChat
 - no published host port for the MCP
 - a working `LegalServer` MCP entry in `librechat.yaml`
-- successful LibreChat tool calls to both normal read-only tools and `task_list_current_user_on_date`
+- successful LibreChat tool calls to both normal read-only tools and the request-scoped current-user tools
 
 ## What You Are Building
 
@@ -76,7 +76,7 @@ From the LibreChat deployment root:
 
 ```bash
 cd /opt/librechat/custom-tools
-git clone --branch v3-http-user-scope https://github.com/MarylandLegalAid/legalserver-mcp.git legalserver-v2
+git clone --branch v2 https://github.com/MarylandLegalAid/legalserver-mcp.git legalserver-v2
 cd legalserver-v2
 ```
 
@@ -324,7 +324,7 @@ If that works, the base transport and LegalServer bearer-token path are function
 
 ## Step 12: Validate A User-Scoped Tool
 
-Now test the user-scoped prototype.
+Now test the user-scoped tools.
 
 Sign in to LibreChat as a user whose email also exists in LegalServer, then ask:
 
@@ -337,7 +337,7 @@ Expected behavior:
 - LibreChat sends the shared secret header
 - LibreChat sends the signed-in user's email in `X-LegalServer-User-Email`
 - the MCP resolves that email against LegalServer users
-- the MCP runs `task_list_current_user_on_date`
+- the MCP runs one of the current-user tools such as `task_list_current_user_on_date`
 - only tasks assigned to that LegalServer user are returned
 
 ## What To Expect If It Works
@@ -349,7 +349,7 @@ At this point all of these should be true:
 - `docker compose exec api ... /mcp` returns `405`
 - LibreChat logs do not show allowlist or fetch errors
 - LibreChat can call at least one non-user-scoped LegalServer tool
-- LibreChat can call `task_list_current_user_on_date`
+- LibreChat can call the current-user LegalServer tools
 
 ## Common Mistakes
 
@@ -517,11 +517,11 @@ Before you consider the HTTP deployment complete:
 - confirm `/healthz` is `200` from inside the LibreChat container
 - confirm `/mcp` is `405` from inside the LibreChat container
 - confirm one non-user-scoped tool works
-- confirm `task_list_current_user_on_date` works
+- confirm a current-user LegalServer tool works
 - confirm LibreChat logs are free of MCP allowlist and transport errors
 
 ## References
 
 - LibreChat MCP Servers docs: https://www.librechat.ai/docs/configuration/librechat_yaml/object_structure/mcp_servers
 - LibreChat MCP Settings docs: https://www.librechat.ai/docs/configuration/librechat_yaml/object_structure/mcp_settings
-- Shorter repo explainer: [docs/explainers/librechat-v3-wiring.md](/home/john/repos/legalserver-mcp/docs/explainers/librechat-v3-wiring.md)
+- Bundled LegalServer API spec: [docs/LegalServerAPI.v1.yaml](/home/john/repos/legalserver-mcp/docs/LegalServerAPI.v1.yaml)

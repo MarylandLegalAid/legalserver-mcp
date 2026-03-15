@@ -23,6 +23,9 @@ test('.env.example exposes phase 2 OCR configuration', () => {
   assert.match(envExample, /^PHASE3_CONTACT_EMAIL=/m);
   assert.match(envExample, /^PHASE3_USER_LOGIN=/m);
   assert.match(envExample, /^PHASE3_ORGANIZATION_NAME=/m);
+  assert.match(envExample, /^PHASE3_CURRENT_USER_EMAIL=/m);
   assert.match(envExample, /^PHASE3_TASK_DATE=/m);
   assert.match(envExample, /^PHASE3_EVENT_DATE=/m);
+  assert.match(envExample, /^PHASE3_RANGE_START_DATE=/m);
+  assert.match(envExample, /^PHASE3_RANGE_END_DATE=/m);
 });

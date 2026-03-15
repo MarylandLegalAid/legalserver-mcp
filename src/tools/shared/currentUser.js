@@ -1,4 +1,4 @@
-const { findExactMatch } = require('./globalDiscovery');
+const { findExactMatch, normalizeUserRef } = require('./globalDiscovery');
 
 function readHeaderValue(headers, headerName) {
   const normalizedHeaderName = String(headerName || '').trim().toLowerCase();
@@ -25,7 +25,7 @@ function readHeaderValue(headers, headerName) {
   return null;
 }
 
-async function resolveCurrentUser({ client, config, helpers, requestInfo }) {
+async function resolveCurrentUserMatch({ client, config, helpers, requestInfo }) {
   const headerName = config?.userEmailHeader || 'x-legalserver-user-email';
   const email = readHeaderValue(requestInfo?.headers, headerName);
 
@@ -58,15 +58,50 @@ async function resolveCurrentUser({ client, config, helpers, requestInfo }) {
     throw error;
   });
 
-  return {
+  const currentUser = {
     email: record.email ?? email,
     user_uuid: record.user_uuid ?? null,
     id: record.id ?? null,
     login: record.login ?? null,
     full_name: helpers.normalizeDisplayName(record),
   };
+
+  return {
+    headerName,
+    email,
+    record,
+    currentUser,
+  };
+}
+
+async function resolveCurrentUser({ client, config, helpers, requestInfo }) {
+  const match = await resolveCurrentUserMatch({
+    client,
+    config,
+    helpers,
+    requestInfo,
+  });
+
+  return match.currentUser;
+}
+
+function currentUserMatchesUserRef(currentUser, value) {
+  const userRef = normalizeUserRef(value);
+  if (!userRef || !currentUser) {
+    return false;
+  }
+
+  if (currentUser.user_uuid && userRef.user_uuid === currentUser.user_uuid) {
+    return true;
+  }
+
+  return currentUser.id !== null
+    && currentUser.id !== undefined
+    && userRef.id === currentUser.id;
 }
 
 module.exports = {
+  currentUserMatchesUserRef,
   resolveCurrentUser,
+  resolveCurrentUserMatch,
 };

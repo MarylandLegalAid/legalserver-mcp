@@ -1,6 +1,6 @@
 # LegalServer MCP Server
 
-`legalserver-mcp` is a read-only Model Context Protocol server for documented LegalServer v1 matter, document, and discovery endpoints. This branch is `v3`, which replaces the old `stdio` runtime with a Streamable HTTP server and adds one request-scoped prototype tool for "my tasks" style workflows.
+`legalserver-mcp` is a read-only Model Context Protocol server for documented LegalServer v1 matter, document, and discovery endpoints. The current implementation uses a Streamable HTTP server and includes one request-scoped prototype tool for "my tasks" style workflows.
 
 Version: `3.0.0`
 
@@ -95,18 +95,24 @@ Phase 3 global discovery tools:
 - `task_get`
 - `task_list_on_date`
 - `task_list_current_user_on_date`
+- `task_list_current_user_between_dates`
 - `event_search`
 - `event_get`
 - `event_list_by_date`
+- `event_list_current_user_on_date`
+- `event_list_current_user_between_dates`
 - `contact_search`
 - `contact_get`
 - `contact_lookup_by_email`
 - `user_search`
 - `user_get`
+- `user_get_current`
+- `user_list_current_user_supervisors`
 - `user_lookup_by_login`
 - `organization_search`
 - `organization_get`
 - `organization_lookup_by_name`
+- `matter_list_current_user`
 
 All list/search tools default to `page=1` and `page_size=10`. `page_size` is capped at `25`.
 Exact-match convenience lookups return `404 not_found` when no exact match exists and `409 multiple_matches` when more than one exact match is found.
@@ -195,6 +201,7 @@ First-class internal error codes:
 - `multiple_matches` (`409`)
 - `missing_user_context` (`400`)
 - `user_context_unresolved` (`404`)
+- `assignment_visibility_unavailable` (`412`)
 
 When LegalServer returns a broken document endpoint, phase 2.5 now surfaces clean structured extraction errors instead of passing raw HTML error pages through tool responses.
 
@@ -294,16 +301,19 @@ Example server instructions:
 
 Use only these tools:
 
-- `task_list_on_date`
 - `task_list_current_user_on_date`
-- `event_list_by_date`
+- `task_list_current_user_between_dates`
+- `event_list_current_user_on_date`
+- `event_list_current_user_between_dates`
+- `matter_list_current_user`
+- `user_get_current`
 - `contact_lookup_by_email`
 - `user_lookup_by_login`
 - `organization_lookup_by_name`
 
 Example server instructions:
 
-> Use `task_list_current_user_on_date` for "my tasks" questions. Use the exact-match lookup tools first when the user provides a contact email, user login, or organization name. For broader workload and calendar questions, prefer `task_list_on_date` and `event_list_by_date` before broader search tools.
+> When the user says "my", prefer the current-user tools that rely on the forwarded LegalServer email header. Use `task_list_current_user_on_date` and `task_list_current_user_between_dates` for workload questions, `event_list_current_user_on_date` and `event_list_current_user_between_dates` for schedule questions, `matter_list_current_user` for assigned-matter questions, and `user_get_current` for profile questions. Use the exact-match lookup tools first when the user provides a contact email, user login, or organization name.
 
 ## Validation
 
@@ -334,7 +344,7 @@ The manual script exercises the identifier-first download path, so it remains va
 Manual phase 3 validation against a real LegalServer environment:
 
 ```bash
-npm run manual:phase3 -- --contact_email <email> --user_login <login> --organization_name "<org>" --task_date <yyyy-mm-dd> --event_date <yyyy-mm-dd>
+npm run manual:phase3 -- --contact_email <email> --user_login <login> --organization_name "<org>" --current_user_email <email> --task_date <yyyy-mm-dd> --event_date <yyyy-mm-dd> --range_start_date <yyyy-mm-dd> --range_end_date <yyyy-mm-dd>
 ```
 
 If the target tenant rejects the documented event `date` search key, the manual script will still succeed via the bounded fallback path and will print the emitted warnings.
@@ -343,5 +353,5 @@ Recommended LibreChat cutover checks:
 
 - keep only one LegalServer MCP server enabled in `librechat.yaml`
 - confirm a non-user-scoped tool such as `contact_lookup_by_email` works over HTTP
-- confirm `task_list_current_user_on_date` works for a signed-in LibreChat user
+- confirm current-user workload/calendar tools work for a signed-in LibreChat user
 - confirm the MCP container is healthy and no host port is published

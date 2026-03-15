@@ -219,6 +219,32 @@ test('HTTP server lists canonical tools and supports current-user task lookup', 
       });
     }
 
+    if (parsed.pathname === '/api/v1/users/user-uuid-1') {
+      return jsonResponse(200, {
+        data: {
+          id: 404,
+          user_uuid: 'user-uuid-1',
+          first: 'Jordan',
+          last: 'Staff',
+          email: 'jordan@example.org',
+          login: 'jstaff',
+          active: true,
+          current: true,
+          contact_active: true,
+          supervisors: [{
+            id: 91,
+            uuid: 'supervisor-link-1',
+            supervisor_type: 'Primary',
+            supervisor: {
+              user_id: 500,
+              user_uuid: 'user-uuid-supervisor',
+              user_name: 'Supervisor Person',
+            },
+          }],
+        },
+      });
+    }
+
     if (parsed.pathname === '/api/v1/tasks') {
       return jsonResponse(200, {
         page_number: 1,
@@ -315,6 +341,17 @@ test('HTTP server lists canonical tools and supports current-user task lookup', 
     assert.deepEqual(payload.data.map((item) => item.task_uuid), ['task-uuid-current']);
     assert.equal(fetchCalls.filter((url) => url.includes('/api/v1/users')).length, 1);
     assert.equal(fetchCalls.filter((url) => url.includes('/api/v1/tasks')).length, 1);
+
+    const currentUserResult = await client.callTool({
+      name: 'user_get_current',
+      arguments: {},
+    });
+    const currentUserPayload = parseToolResult(currentUserResult);
+
+    assert.equal(currentUserPayload.ok, true);
+    assert.equal(currentUserPayload.data.user_uuid, 'user-uuid-1');
+    assert.equal(currentUserPayload.data.supervisors[0].supervisor.user_uuid, 'user-uuid-supervisor');
+    assert.equal(fetchCalls.filter((url) => url.includes('/api/v1/users/user-uuid-1')).length, 1);
   } finally {
     await client.close();
     server.close();

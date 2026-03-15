@@ -153,6 +153,21 @@ const sampleEvent = {
   },
 };
 
+const sampleCurrentUserEvent = {
+  ...sampleEvent,
+  id: 203,
+  event_uuid: 'event-uuid-current-user',
+  title: 'My Hearing',
+  attendees: {
+    all_values: 'Jordan Staff',
+    individual_values: [{
+      user_id: 404,
+      user_uuid: 'user-uuid-1',
+      user_name: 'Jordan Staff',
+    }],
+  },
+};
+
 const sampleContact = {
   id: 303,
   uuid: 'contact-uuid-1',
@@ -298,6 +313,65 @@ const sampleOrganization = {
   }],
 };
 
+const sampleMatterAssignment = {
+  id: 701,
+  uuid: 'assignment-uuid-1',
+  type: 'Primary',
+  start_date: '2025-01-01',
+  end_date: null,
+  date_requested: null,
+  confirmed: true,
+  program: 'Housing',
+  office: {
+    office_name: 'Main Office',
+    office_code: 'MO',
+    office_display: 'Main Office',
+  },
+  name: 'Jordan Staff',
+  user: {
+    user_id: 404,
+    user_uuid: 'user-uuid-1',
+    user_name: 'Jordan Staff',
+  },
+  assigned_by: {
+    user_id: 3,
+    user_uuid: 'user-uuid-3',
+    user_name: 'Creator User',
+  },
+  notes: 'Lead assignment',
+  created_at: '2026-01-05T09:00:00Z',
+};
+
+const sampleMatter = {
+  matter_uuid: 'matter-uuid-current',
+  case_id: 601,
+  case_number: '26-0001',
+  case_title: 'Eviction Defense',
+  client_full_name: 'Alex Client',
+  case_status: 'Open',
+  case_disposition: 'Open',
+  legal_problem_code: '01 Housing',
+  case_profile_url: 'https://example.legalserver.org/matter/601',
+  date_opened: '2026-01-05',
+  assignments: [sampleMatterAssignment],
+};
+
+const sampleOtherMatter = {
+  ...sampleMatter,
+  matter_uuid: 'matter-uuid-other',
+  case_id: 602,
+  case_number: '26-0002',
+  assignments: [{
+    ...sampleMatterAssignment,
+    uuid: 'assignment-uuid-2',
+    user: {
+      user_id: 7,
+      user_uuid: 'user-uuid-7',
+      user_name: 'Assigned User',
+    },
+  }],
+};
+
 test('task_search and task_list_on_date send the documented query shape and map summaries', async () => {
   const { registry, calls } = createRegistry([
     jsonResponse(200, makePaginated([sampleTask])),
@@ -432,6 +506,65 @@ test('task_list_current_user_on_date marks results truncated when the user filte
   assert.match(payload.warnings[0], /stopped after 20 upstream task pages/i);
 });
 
+test('task_list_current_user_between_dates aggregates multiple dates for the resolved user', async () => {
+  const secondDayTask = {
+    ...sampleCurrentUserTask,
+    id: 103,
+    task_uuid: 'task-uuid-current-user-2',
+    title: 'Second day task',
+    list_date: '2026-03-13',
+    due_date: '2026-03-13',
+  };
+  const { registry, calls } = createRegistry([
+    jsonResponse(200, makePaginated([sampleUser], 1, 25, 1, 1)),
+    jsonResponse(200, makePaginated([sampleCurrentUserTask], 1, 25, 1, 1)),
+    jsonResponse(200, makePaginated([secondDayTask], 1, 25, 1, 1)),
+  ]);
+
+  const payload = await registry.execute(
+    'task_list_current_user_between_dates',
+    { start_date: '2026-03-12', end_date: '2026-03-13' },
+    {
+      requestInfo: {
+        headers: {
+          'x-legalserver-user-email': 'jordan@example.org',
+        },
+      },
+    },
+  );
+
+  assert.deepEqual(payload.data.map((item) => item.task_uuid), [
+    'task-uuid-current-user',
+    'task-uuid-current-user-2',
+  ]);
+  assert.equal(payload.truncated, false);
+
+  const firstTaskUrl = new URL(calls[1].url);
+  assert.equal(firstTaskUrl.searchParams.get('list_date'), '2026-03-12');
+
+  const secondTaskUrl = new URL(calls[2].url);
+  assert.equal(secondTaskUrl.searchParams.get('list_date'), '2026-03-13');
+});
+
+test('task_list_current_user_between_dates rejects ranges longer than seven days', async () => {
+  const { registry } = createRegistry([]);
+
+  await assert.rejects(
+    () => registry.execute(
+      'task_list_current_user_between_dates',
+      { start_date: '2026-03-01', end_date: '2026-03-08' },
+      {
+        requestInfo: {
+          headers: {
+            'x-legalserver-user-email': 'jordan@example.org',
+          },
+        },
+      },
+    ),
+    /cannot exceed 7 day\(s\)/i,
+  );
+});
+
 test('task_get returns phase 3 detail fields', async () => {
   const { registry } = createRegistry([
     jsonResponse(200, { data: sampleTask }),
@@ -505,6 +638,58 @@ test('event_list_by_date falls back to a bounded local date filter when LegalSer
   assert.equal(secondUrl.searchParams.get('sort'), 'desc');
 });
 
+test('event_list_current_user_on_date filters by attendee and returns matter context', async () => {
+  const { registry } = createRegistry([
+    jsonResponse(200, makePaginated([sampleUser], 1, 25, 1, 1)),
+    jsonResponse(200, makePaginated([sampleEvent, sampleCurrentUserEvent], 1, 25, 1, 2)),
+  ]);
+
+  const payload = await registry.execute(
+    'event_list_current_user_on_date',
+    { date: '2026-03-12' },
+    {
+      requestInfo: {
+        headers: {
+          'x-legalserver-user-email': 'jordan@example.org',
+        },
+      },
+    },
+  );
+
+  assert.deepEqual(payload.data.map((item) => item.event_uuid), ['event-uuid-current-user']);
+  assert.equal(payload.data[0].matters[0].case_uuid, 'matter-uuid-1');
+  assert.equal(payload.data[0].outreaches[0].outreach_uuid, 'outreach-uuid-1');
+});
+
+test('event_list_current_user_between_dates falls back once and deduplicates range results', async () => {
+  const spanningCurrentUserEvent = {
+    ...sampleCurrentUserEvent,
+    start_datetime: '2026-03-12T09:00:00-05:00',
+    end_datetime: '2026-03-13T10:00:00-05:00',
+  };
+  const { registry } = createRegistry([
+    jsonResponse(200, makePaginated([sampleUser], 1, 25, 1, 1)),
+    jsonResponse(400, { invalid_search_keys: ['date'] }),
+    jsonResponse(200, makePaginated([spanningCurrentUserEvent], 1, 25, 1, 1)),
+  ]);
+
+  const payload = await registry.execute(
+    'event_list_current_user_between_dates',
+    { start_date: '2026-03-12', end_date: '2026-03-13' },
+    {
+      requestInfo: {
+        headers: {
+          'x-legalserver-user-email': 'jordan@example.org',
+        },
+      },
+    },
+  );
+
+  assert.deepEqual(payload.data.map((item) => item.event_uuid), ['event-uuid-current-user']);
+  assert.equal(payload.warnings.length, 1);
+  assert.match(payload.warnings[0], /rejected the documented event date search key/i);
+});
+
 test('contact_search enforces results=full and contact_get returns the curated detail shape', async () => {
   const { registry, calls } = createRegistry([
     jsonResponse(200, makePaginated([sampleContact])),
@@ -568,6 +753,116 @@ test('user_search, user_get, and user_lookup_by_login return the phase 3 user sh
   });
   assert.equal(lookup.data.user_uuid, 'user-uuid-1');
   assert.equal(lookup.data.login, 'jstaff');
+});
+
+test('user_get_current and user_list_current_user_supervisors resolve the request user', async () => {
+  const { registry, calls } = createRegistry([
+    jsonResponse(200, makePaginated([sampleUser], 1, 25, 1, 1)),
+    jsonResponse(200, { data: sampleUser }),
+    jsonResponse(200, makePaginated([sampleUser], 1, 25, 1, 1)),
+    jsonResponse(200, makePaginated(sampleUser.supervisors, 1, 10, 1, sampleUser.supervisors.length)),
+  ]);
+
+  const current = await registry.execute(
+    'user_get_current',
+    {},
+    {
+      requestInfo: {
+        headers: {
+          'x-legalserver-user-email': 'jordan@example.org',
+        },
+      },
+    },
+  );
+  assert.equal(current.data.user_uuid, 'user-uuid-1');
+  assert.equal(current.data.supervisors[0].supervisor.user_uuid, 'user-uuid-supervisor');
+
+  const supervisors = await registry.execute(
+    'user_list_current_user_supervisors',
+    { supervisor_type: 'Primary' },
+    {
+      requestInfo: {
+        headers: {
+          'x-legalserver-user-email': 'jordan@example.org',
+        },
+      },
+    },
+  );
+  assert.equal(supervisors.data[0].supervisor.user_uuid, 'user-uuid-supervisor');
+
+  const supervisorUrl = new URL(calls[3].url);
+  assert.equal(supervisorUrl.pathname, '/api/v1/users/user-uuid-1/supervisors');
+  assert.equal(supervisorUrl.searchParams.get('supervisor_type'), 'Primary');
+});
+
+test('user_get_current fails when the request-scoped email header is missing', async () => {
+  const { registry } = createRegistry([]);
+
+  await assert.rejects(
+    () => registry.execute('user_get_current', {}),
+    (error) => {
+      assert.equal(error.errorCode, 'missing_user_context');
+      assert.equal(error.status, 400);
+      return true;
+    },
+  );
+});
+
+test('matter_list_current_user filters matters by current user assignment and forwards search filters', async () => {
+  const { registry, calls } = createRegistry([
+    jsonResponse(200, makePaginated([sampleUser], 1, 25, 1, 1)),
+    jsonResponse(200, makePaginated([sampleMatter, sampleOtherMatter], 1, 25, 1, 2)),
+  ]);
+
+  const payload = await registry.execute(
+    'matter_list_current_user',
+    { assignment_type: 'Primary', current_only: true },
+    {
+      requestInfo: {
+        headers: {
+          'x-legalserver-user-email': 'jordan@example.org',
+        },
+      },
+    },
+  );
+
+  assert.deepEqual(payload.data.map((item) => item.case_uuid), ['matter-uuid-current']);
+  assert.equal(payload.data[0].matching_assignments[0].assignment_uuid, 'assignment-uuid-1');
+
+  const matterUrl = new URL(calls[1].url);
+  assert.equal(matterUrl.searchParams.get('results'), 'full');
+  assert.equal(matterUrl.searchParams.get('assignments:type'), 'Primary');
+});
+
+test('matter_list_current_user fails when matter search omits assignments', async () => {
+  const { registry } = createRegistry([
+    jsonResponse(200, makePaginated([sampleUser], 1, 25, 1, 1)),
+    jsonResponse(200, makePaginated([{
+      matter_uuid: 'matter-uuid-without-assignments',
+      case_id: 603,
+      case_number: '26-0003',
+      client_full_name: 'Missing Assignments',
+    }], 1, 25, 1, 1)),
+  ]);
+
+  await assert.rejects(
+    () => registry.execute(
+      'matter_list_current_user',
+      {},
+      {
+        requestInfo: {
+          headers: {
+            'x-legalserver-user-email': 'jordan@example.org',
+          },
+        },
+      },
+    ),
+    (error) => {
+      assert.equal(error.errorCode, 'assignment_visibility_unavailable');
+      assert.equal(error.status, 412);
+      return true;
+    },
+  );
 });
 
 test('organization_search previews descriptions and organization_get truncates very large detail text', async () => {

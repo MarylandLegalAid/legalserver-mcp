@@ -1,5 +1,6 @@
 const { DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE } = require('../constants');
 const { pageProperties, uuidProperty } = require('./shared/schemas');
+const { resolveCurrentUserMatch } = require('./shared/currentUser');
 const {
   findExactMatch,
   normalizeOfficeCollection,
@@ -165,6 +166,99 @@ function createUserTools() {
           totalPages: 1,
           truncated: false,
           next: null,
+        });
+      },
+    },
+    {
+      name: 'user_get_current',
+      description: 'Return the LegalServer user record for the current request user.',
+      inputSchema: {
+        type: 'object',
+        properties: {},
+        additionalProperties: false,
+      },
+      budgetPolicy: {},
+      handler: async ({ client, config, helpers, requestInfo }) => {
+        const match = await resolveCurrentUserMatch({
+          client,
+          config,
+          helpers,
+          requestInfo,
+        });
+
+        if (!match.currentUser.user_uuid) {
+          return helpers.successEnvelope({
+            data: mapUserDetail(match.record || {}, helpers),
+            page: 1,
+            pageSize: 1,
+            totalRecords: 1,
+            totalPages: 1,
+            truncated: false,
+            next: null,
+          });
+        }
+
+        const response = await client.getJson('/api/v1/users/{user_uuid}', {
+          pathParams: { user_uuid: match.currentUser.user_uuid },
+        });
+
+        return helpers.successEnvelope({
+          data: mapUserDetail(response.data || match.record || {}, helpers),
+          page: 1,
+          pageSize: 1,
+          totalRecords: 1,
+          totalPages: 1,
+          truncated: false,
+          next: null,
+        });
+      },
+    },
+    {
+      name: 'user_list_current_user_supervisors',
+      description: 'List supervisor links for the current request user.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          ...pageProperties(),
+          supervisor_type: {
+            type: 'string',
+            description: 'Optional supervisor type filter.',
+          },
+        },
+        additionalProperties: false,
+      },
+      budgetPolicy: {
+        page_size_default: DEFAULT_PAGE_SIZE,
+        page_size_max: MAX_PAGE_SIZE,
+      },
+      handler: async ({ args, client, config, helpers, requestInfo }) => {
+        const match = await resolveCurrentUserMatch({
+          client,
+          config,
+          helpers,
+          requestInfo,
+        });
+
+        if (!match.currentUser.user_uuid) {
+          throw new helpers.ToolError({
+            errorCode: 'user_context_unresolved',
+            message: `No LegalServer user UUID was available for email ${match.email}.`,
+            status: 404,
+          });
+        }
+
+        return runPaginatedSearch({
+          args,
+          client,
+          helpers,
+          pathTemplate: '/api/v1/users/{user_uuid}/supervisors',
+          pathParams: {
+            user_uuid: match.currentUser.user_uuid,
+          },
+          queryBuilder: (toolArgs) => ({
+            supervisor_type: toolArgs.supervisor_type,
+          }),
+          mapper: mapSupervisor,
         });
       },
     },

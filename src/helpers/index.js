@@ -1,6 +1,8 @@
 const { LegalServerApiError, ToolError, parseLegalServerError, toErrorEnvelope } = require('./errors');
 const {
+  compareIsoDates,
   getFirstDefined,
+  listInclusiveIsoDates,
   normalizeArrayValue,
   normalizeCounty,
   normalizeDateValue,
@@ -25,8 +27,10 @@ module.exports = {
   LegalServerApiError,
   ToolError,
   buildNextPage,
+  compareIsoDates,
   getFirstDefined,
   htmlToText,
+  listInclusiveIsoDates,
   makePreview,
   normalizeArrayValue,
   normalizeCounty,

@@ -38,17 +38,20 @@ function parseArgs(argv) {
 function printUsage() {
   console.log(`
 Usage:
-  npm run manual:phase3 -- --contact_email <email> --user_login <login> --organization_name <name> --task_date <yyyy-mm-dd> --event_date <yyyy-mm-dd>
+  npm run manual:phase3 -- --contact_email <email> --user_login <login> --organization_name <name> --current_user_email <email> --task_date <yyyy-mm-dd> --event_date <yyyy-mm-dd> --range_start_date <yyyy-mm-dd> --range_end_date <yyyy-mm-dd>
 
 Environment fallbacks:
   PHASE3_CONTACT_EMAIL
   PHASE3_USER_LOGIN
   PHASE3_ORGANIZATION_NAME
+  PHASE3_CURRENT_USER_EMAIL
   PHASE3_TASK_DATE
   PHASE3_EVENT_DATE
+  PHASE3_RANGE_START_DATE
+  PHASE3_RANGE_END_DATE
 
 Examples:
-  npm run manual:phase3 -- --contact_email intake@example.org --user_login jstaff --organization_name "Legal Aid Partners" --task_date 2026-03-12 --event_date 2026-03-12
+  npm run manual:phase3 -- --contact_email intake@example.org --user_login jstaff --organization_name "Legal Aid Partners" --current_user_email jstaff@example.org --task_date 2026-03-12 --event_date 2026-03-12 --range_start_date 2026-03-12 --range_end_date 2026-03-18
 `);
 }
 
@@ -62,12 +65,15 @@ async function main() {
   const contactEmail = args.contact_email || process.env.PHASE3_CONTACT_EMAIL;
   const userLogin = args.user_login || process.env.PHASE3_USER_LOGIN;
   const organizationName = args.organization_name || process.env.PHASE3_ORGANIZATION_NAME;
+  const currentUserEmail = args.current_user_email || process.env.PHASE3_CURRENT_USER_EMAIL;
   const taskDate = args.task_date || process.env.PHASE3_TASK_DATE;
   const eventDate = args.event_date || process.env.PHASE3_EVENT_DATE;
+  const rangeStartDate = args.range_start_date || process.env.PHASE3_RANGE_START_DATE;
+  const rangeEndDate = args.range_end_date || process.env.PHASE3_RANGE_END_DATE;
 
-  if (!contactEmail || !userLogin || !organizationName || !taskDate || !eventDate) {
+  if (!contactEmail || !userLogin || !organizationName || !currentUserEmail || !taskDate || !eventDate || !rangeStartDate || !rangeEndDate) {
     printUsage();
-    throw new Error('contact_email, user_login, organization_name, task_date, and event_date are required');
+    throw new Error('contact_email, user_login, organization_name, current_user_email, task_date, event_date, range_start_date, and range_end_date are required');
   }
 
   const config = loadConfig(process.env);
@@ -80,12 +86,20 @@ async function main() {
   const registry = createToolRegistry({
     client,
     helpers,
+    config,
     documentTextPipeline: createDocumentTextPipeline({
       client,
       config,
       ocrProvider: createOcrProvider(config),
     }),
   });
+  const currentUserRequestContext = {
+    requestInfo: {
+      headers: {
+        [config.userEmailHeader || 'x-legalserver-user-email']: currentUserEmail,
+      },
+    },
+  };
 
   async function runStep(label, fn) {
     try {
@@ -112,12 +126,27 @@ async function main() {
   const organization = await runStep('Organization lookup', () => registry.execute('organization_lookup_by_name', { name: organizationName }));
   const tasks = await runStep('Task list on date', () => registry.execute('task_list_on_date', { date: taskDate }));
   const events = await runStep('Event list by date', () => registry.execute('event_list_by_date', { date: eventDate }));
+  const currentUserProfile = await runStep('Current user profile', () => registry.execute('user_get_current', {}, currentUserRequestContext));
+  const currentUserTasksOnDate = await runStep('Current user task list on date', () => registry.execute('task_list_current_user_on_date', { date: taskDate }, currentUserRequestContext));
+  const currentUserTasksRange = await runStep('Current user task list in range', () => registry.execute('task_list_current_user_between_dates', {
+    start_date: rangeStartDate,
+    end_date: rangeEndDate,
+  }, currentUserRequestContext));
+  const currentUserEventsOnDate = await runStep('Current user event list on date', () => registry.execute('event_list_current_user_on_date', { date: eventDate }, currentUserRequestContext));
+  const currentUserEventsRange = await runStep('Current user event list in range', () => registry.execute('event_list_current_user_between_dates', {
+    start_date: rangeStartDate,
+    end_date: rangeEndDate,
+  }, currentUserRequestContext));
+  const currentUserMatters = await runStep('Current user matters', () => registry.execute('matter_list_current_user', {}, currentUserRequestContext));
 
   console.log('\nContact lookup');
   console.log(JSON.stringify(contact.ok ? contact.value.data : contact.error, null, 2));
 
   console.log('\nUser lookup');
   console.log(JSON.stringify(user.ok ? user.value.data : user.error, null, 2));
+
+  console.log('\nCurrent user profile');
+  console.log(JSON.stringify(currentUserProfile.ok ? currentUserProfile.value.data : currentUserProfile.error, null, 2));
 
   console.log('\nOrganization lookup');
   console.log(JSON.stringify(organization.ok ? organization.value.data : organization.error, null, 2));
@@ -142,6 +171,31 @@ async function main() {
     console.log(JSON.stringify(taskDetail.ok ? taskDetail.value.data : taskDetail.error, null, 2));
   }
 
+  console.log('\nCurrent user task list on date');
+  console.log(JSON.stringify({
+    date: taskDate,
+    ...(currentUserTasksOnDate.ok
+      ? {
+          total_records: currentUserTasksOnDate.value.total_records,
+          warnings: currentUserTasksOnDate.value.warnings,
+          first_result: currentUserTasksOnDate.value.data[0] || null,
+        }
+      : { error: currentUserTasksOnDate.error }),
+  }, null, 2));
+
+  console.log('\nCurrent user task list in range');
+  console.log(JSON.stringify({
+    start_date: rangeStartDate,
+    end_date: rangeEndDate,
+    ...(currentUserTasksRange.ok
+      ? {
+          total_records: currentUserTasksRange.value.total_records,
+          warnings: currentUserTasksRange.value.warnings,
+          first_result: currentUserTasksRange.value.data[0] || null,
+        }
+      : { error: currentUserTasksRange.error }),
+  }, null, 2));
+
   console.log('\nEvent list by date');
   console.log(JSON.stringify({
     date: eventDate,
@@ -162,7 +216,55 @@ async function main() {
     console.log(JSON.stringify(eventDetail.ok ? eventDetail.value.data : eventDetail.error, null, 2));
   }
 
-  const failures = [contact, user, organization, tasks, events].filter((result) => result.ok === false);
+  console.log('\nCurrent user event list on date');
+  console.log(JSON.stringify({
+    date: eventDate,
+    ...(currentUserEventsOnDate.ok
+      ? {
+          total_records: currentUserEventsOnDate.value.total_records,
+          warnings: currentUserEventsOnDate.value.warnings,
+          first_result: currentUserEventsOnDate.value.data[0] || null,
+        }
+      : { error: currentUserEventsOnDate.error }),
+  }, null, 2));
+
+  console.log('\nCurrent user event list in range');
+  console.log(JSON.stringify({
+    start_date: rangeStartDate,
+    end_date: rangeEndDate,
+    ...(currentUserEventsRange.ok
+      ? {
+          total_records: currentUserEventsRange.value.total_records,
+          warnings: currentUserEventsRange.value.warnings,
+          first_result: currentUserEventsRange.value.data[0] || null,
+        }
+      : { error: currentUserEventsRange.error }),
+  }, null, 2));
+
+  console.log('\nCurrent user matters');
+  console.log(JSON.stringify({
+    ...(currentUserMatters.ok
+      ? {
+          total_records: currentUserMatters.value.total_records,
+          warnings: currentUserMatters.value.warnings,
+          first_result: currentUserMatters.value.data[0] || null,
+        }
+      : { error: currentUserMatters.error }),
+  }, null, 2));
+
+  const failures = [
+    contact,
+    user,
+    organization,
+    tasks,
+    events,
+    currentUserProfile,
+    currentUserTasksOnDate,
+    currentUserTasksRange,
+    currentUserEventsOnDate,
+    currentUserEventsRange,
+    currentUserMatters,
+  ].filter((result) => result.ok === false);
   if (failures.length > 0) {
     throw new Error(`One or more phase 3 manual validation steps failed: ${failures.map((item) => item.label).join(', ')}`);
   }

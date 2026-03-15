@@ -122,8 +122,72 @@ function validateIsoDate(value, fieldName) {
   return normalized;
 }
 
+function parseIsoDateToUtc(value, fieldName) {
+  const normalized = validateIsoDate(value, fieldName);
+  const date = new Date(`${normalized}T00:00:00Z`);
+
+  if (Number.isNaN(date.getTime())) {
+    throw new Error(`${fieldName} must be an ISO date in YYYY-MM-DD format`);
+  }
+
+  return {
+    normalized,
+    date,
+  };
+}
+
+function formatUtcIsoDate(date) {
+  return date.toISOString().slice(0, 10);
+}
+
+function listInclusiveIsoDates(startValue, endValue, maxDays) {
+  const start = parseIsoDateToUtc(startValue, 'start_date');
+  const end = parseIsoDateToUtc(endValue, 'end_date');
+
+  if (start.date.getTime() > end.date.getTime()) {
+    throw new Error('end_date must be on or after start_date');
+  }
+
+  const maxAllowedDays = Number(maxDays);
+  const diffDays = Math.floor((end.date.getTime() - start.date.getTime()) / (24 * 60 * 60 * 1000)) + 1;
+  if (Number.isFinite(maxAllowedDays) && maxAllowedDays > 0 && diffDays > maxAllowedDays) {
+    throw new Error(`Date ranges cannot exceed ${maxAllowedDays} day(s)`);
+  }
+
+  const dates = [];
+  const cursor = new Date(start.date.getTime());
+
+  while (cursor.getTime() <= end.date.getTime()) {
+    dates.push(formatUtcIsoDate(cursor));
+    cursor.setUTCDate(cursor.getUTCDate() + 1);
+  }
+
+  return {
+    start_date: start.normalized,
+    end_date: end.normalized,
+    dates,
+  };
+}
+
+function compareIsoDates(left, right, leftFieldName = 'left_date', rightFieldName = 'right_date') {
+  const normalizedLeft = validateIsoDate(left, leftFieldName);
+  const normalizedRight = validateIsoDate(right, rightFieldName);
+
+  if (normalizedLeft < normalizedRight) {
+    return -1;
+  }
+
+  if (normalizedLeft > normalizedRight) {
+    return 1;
+  }
+
+  return 0;
+}
+
 module.exports = {
+  compareIsoDates,
   getFirstDefined,
+  listInclusiveIsoDates,
   normalizeArrayValue,
   normalizeCounty,
   normalizeDateValue,

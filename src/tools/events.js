@@ -1,4 +1,5 @@
 const {
+  CURRENT_USER_RANGE_MAX_DAYS,
   DEFAULT_PAGE_SIZE,
   EVENT_DATE_FALLBACK_MAX_PAGES,
   MAX_PAGE_SIZE,
@@ -11,6 +12,7 @@ const {
   normalizeUserRef,
   runPaginatedSearch,
 } = require('./shared/globalDiscovery');
+const { currentUserMatchesUserRef, resolveCurrentUser } = require('./shared/currentUser');
 
 function mapEventSummary(record, helpers) {
   const attendees = helpers.normalizeArrayValue(record.attendees).map(normalizeUserRef).filter(Boolean);
@@ -42,6 +44,14 @@ function mapEventDetail(record, helpers) {
   return {
     ...mapEventSummary(record, helpers),
     attendees: helpers.normalizeArrayValue(record.attendees).map(normalizeUserRef).filter(Boolean),
+    matters: helpers.normalizeArrayValue(record.matters).map(normalizeMatterRef).filter(Boolean),
+    outreaches: helpers.normalizeArrayValue(record.outreaches).map(normalizeOutreachRef).filter(Boolean),
+  };
+}
+
+function mapCurrentUserEventSummary(record, helpers) {
+  return {
+    ...mapEventSummary(record, helpers),
     matters: helpers.normalizeArrayValue(record.matters).map(normalizeMatterRef).filter(Boolean),
     outreaches: helpers.normalizeArrayValue(record.outreaches).map(normalizeOutreachRef).filter(Boolean),
   };
@@ -90,6 +100,40 @@ function eventMatchesDate(record, targetDate) {
   }
 
   return startDate === targetDate || endDate === targetDate;
+}
+
+function eventOverlapsDateRange(record, startDate, endDate) {
+  const eventStart = extractIsoDatePart(record.start_datetime);
+  const eventEnd = extractIsoDatePart(record.end_datetime) || eventStart;
+
+  if (!eventStart && !eventEnd) {
+    return false;
+  }
+
+  const normalizedStart = eventStart || eventEnd;
+  const normalizedEnd = eventEnd || eventStart;
+
+  return normalizedStart <= endDate && normalizedEnd >= startDate;
+}
+
+function eventBelongsToCurrentUser(record, helpers, currentUser) {
+  return helpers.normalizeArrayValue(record.attendees).some((attendee) => (
+    currentUserMatchesUserRef(currentUser, attendee)
+  ));
+}
+
+function compareCurrentUserEventSummaries(left, right) {
+  const leftStart = left.start_datetime || '';
+  const rightStart = right.start_datetime || '';
+  if (leftStart !== rightStart) {
+    return leftStart.localeCompare(rightStart);
+  }
+
+  return String(left.title || '').localeCompare(String(right.title || ''));
+}
+
+function eventSummaryKey(item) {
+  return item.event_uuid || String(item.id || `${item.title || 'event'}:${item.start_datetime || ''}`);
 }
 
 function isInvalidDateSearchKeyError(error) {
@@ -158,6 +202,252 @@ async function runEventDateFallbackSearch({
     totalPages: paged.totalPages,
     truncated,
     warnings,
+  });
+}
+
+async function scanCurrentUserEventsOnDate({
+  date,
+  client,
+  helpers,
+  currentUser,
+}) {
+  const matches = [];
+  let sourcePages = 0;
+  let scannedAllPages = false;
+
+  for (let scanPage = 1; scanPage <= EVENT_DATE_FALLBACK_MAX_PAGES; scanPage += 1) {
+    const response = await client.getJson('/api/v1/events', {
+      query: {
+        page_number: scanPage,
+        page_size: MAX_PAGE_SIZE,
+        date,
+      },
+    });
+
+    const records = Array.isArray(response.data) ? response.data : [];
+    sourcePages = response.totalPages || 0;
+
+    for (const record of records) {
+      if (eventMatchesDate(record, date) && eventBelongsToCurrentUser(record, helpers, currentUser)) {
+        matches.push(mapCurrentUserEventSummary(record, helpers));
+      }
+    }
+
+    if (sourcePages === 0 || scanPage >= sourcePages) {
+      scannedAllPages = true;
+      break;
+    }
+  }
+
+  return {
+    matches,
+    scannedAllPages,
+  };
+}
+
+async function scanCurrentUserEventsWithLocalDateFilter({
+  startDate,
+  endDate,
+  client,
+  helpers,
+  currentUser,
+}) {
+  const matches = [];
+  let sourcePages = 0;
+  let scannedAllPages = false;
+
+  for (let scanPage = 1; scanPage <= EVENT_DATE_FALLBACK_MAX_PAGES; scanPage += 1) {
+    const response = await client.getJson('/api/v1/events', {
+      query: {
+        page_number: scanPage,
+        page_size: MAX_PAGE_SIZE,
+        sort: 'desc',
+      },
+    });
+
+    const records = Array.isArray(response.data) ? response.data : [];
+    sourcePages = response.totalPages || 0;
+
+    for (const record of records) {
+      if (!eventOverlapsDateRange(record, startDate, endDate)) {
+        continue;
+      }
+
+      if (!eventBelongsToCurrentUser(record, helpers, currentUser)) {
+        continue;
+      }
+
+      matches.push(mapCurrentUserEventSummary(record, helpers));
+    }
+
+    if (sourcePages === 0 || scanPage >= sourcePages) {
+      scannedAllPages = true;
+      break;
+    }
+  }
+
+  return {
+    matches,
+    scannedAllPages,
+  };
+}
+
+function buildCurrentUserEventEnvelope({ helpers, args, matches, warnings, truncated }) {
+  const deduped = [];
+  const seen = new Set();
+
+  for (const item of matches) {
+    const key = eventSummaryKey(item);
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    deduped.push(item);
+  }
+
+  deduped.sort(compareCurrentUserEventSummaries);
+
+  const page = helpers.validatePage(args.page);
+  const pageSize = helpers.validatePageSize(args.page_size);
+  const paged = helpers.paginateArray(deduped, page, pageSize);
+
+  return helpers.successEnvelope({
+    data: paged.items,
+    page: paged.page,
+    pageSize: paged.pageSize,
+    totalRecords: paged.totalRecords,
+    totalPages: paged.totalPages,
+    truncated,
+    warnings,
+  });
+}
+
+async function runCurrentUserEventListOnDate({ args, client, config, helpers, requestInfo }) {
+  const date = helpers.validateIsoDate(args.date, 'date');
+  const currentUser = await resolveCurrentUser({
+    client,
+    config,
+    helpers,
+    requestInfo,
+  });
+
+  try {
+    const scan = await scanCurrentUserEventsOnDate({
+      date,
+      client,
+      helpers,
+      currentUser,
+    });
+    const warnings = [];
+
+    if (!scan.scannedAllPages) {
+      warnings.push(`The scan stopped after ${EVENT_DATE_FALLBACK_MAX_PAGES} upstream event pages, so counts and next-page hints reflect the scanned window only.`);
+    }
+
+    return buildCurrentUserEventEnvelope({
+      helpers,
+      args,
+      matches: scan.matches,
+      warnings,
+      truncated: !scan.scannedAllPages,
+    });
+  } catch (error) {
+    if (!isInvalidDateSearchKeyError(error)) {
+      throw error;
+    }
+
+    const fallback = await scanCurrentUserEventsWithLocalDateFilter({
+      startDate: date,
+      endDate: date,
+      client,
+      helpers,
+      currentUser,
+    });
+    const warnings = [
+      `LegalServer rejected the documented event date search key, so results were filtered locally from the newest ${EVENT_DATE_FALLBACK_MAX_PAGES * MAX_PAGE_SIZE} events.`,
+    ];
+
+    if (!fallback.scannedAllPages) {
+      warnings.push(`The scan stopped after ${EVENT_DATE_FALLBACK_MAX_PAGES} upstream pages, so counts and next-page hints reflect the scanned window only.`);
+    }
+
+    return buildCurrentUserEventEnvelope({
+      helpers,
+      args,
+      matches: fallback.matches,
+      warnings,
+      truncated: !fallback.scannedAllPages,
+    });
+  }
+}
+
+async function runCurrentUserEventListBetweenDates({ args, client, config, helpers, requestInfo }) {
+  const dateRange = helpers.listInclusiveIsoDates(
+    args.start_date,
+    args.end_date,
+    CURRENT_USER_RANGE_MAX_DAYS,
+  );
+  const currentUser = await resolveCurrentUser({
+    client,
+    config,
+    helpers,
+    requestInfo,
+  });
+  const warnings = [];
+  const truncatedDates = [];
+  const matches = [];
+
+  try {
+    for (const date of dateRange.dates) {
+      const scan = await scanCurrentUserEventsOnDate({
+        date,
+        client,
+        helpers,
+        currentUser,
+      });
+
+      matches.push(...scan.matches);
+      if (!scan.scannedAllPages) {
+        truncatedDates.push(date);
+      }
+    }
+  } catch (error) {
+    if (!isInvalidDateSearchKeyError(error)) {
+      throw error;
+    }
+
+    const fallback = await scanCurrentUserEventsWithLocalDateFilter({
+      startDate: dateRange.start_date,
+      endDate: dateRange.end_date,
+      client,
+      helpers,
+      currentUser,
+    });
+    warnings.push(`LegalServer rejected the documented event date search key, so results were filtered locally from the newest ${EVENT_DATE_FALLBACK_MAX_PAGES * MAX_PAGE_SIZE} events in the requested range.`);
+
+    if (!fallback.scannedAllPages) {
+      warnings.push(`The scan stopped after ${EVENT_DATE_FALLBACK_MAX_PAGES} upstream pages, so counts and next-page hints reflect the scanned window only.`);
+    }
+
+    return buildCurrentUserEventEnvelope({
+      helpers,
+      args,
+      matches: fallback.matches,
+      warnings,
+      truncated: !fallback.scannedAllPages,
+    });
+  }
+
+  if (truncatedDates.length > 0) {
+    warnings.push(`Event scans stopped after ${EVENT_DATE_FALLBACK_MAX_PAGES} upstream pages for ${truncatedDates.join(', ')}, so counts and next-page hints reflect only the scanned window for those date(s).`);
+  }
+
+  return buildCurrentUserEventEnvelope({
+    helpers,
+    args,
+    matches,
+    warnings,
+    truncated: truncatedDates.length > 0,
   });
 }
 
@@ -280,6 +570,55 @@ function createEventTools() {
         mapper: mapEventSummary,
         queryBuilder: (toolArgs) => ({ date: toolArgs.date }),
         fallbackQueryBuilder: () => ({}),
+      }),
+    },
+    {
+      name: 'event_list_current_user_on_date',
+      description: 'List calendar events for the current request user on one date.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          date: isoDateProperty('Event date in YYYY-MM-DD format.'),
+          ...pageProperties(),
+        },
+        required: ['date'],
+        additionalProperties: false,
+      },
+      budgetPolicy: {
+        page_size_default: DEFAULT_PAGE_SIZE,
+        page_size_max: MAX_PAGE_SIZE,
+      },
+      handler: ({ args, client, config, helpers, requestInfo }) => runCurrentUserEventListOnDate({
+        args,
+        client,
+        config,
+        helpers,
+        requestInfo,
+      }),
+    },
+    {
+      name: 'event_list_current_user_between_dates',
+      description: 'List calendar events for the current request user across an inclusive date range.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          start_date: isoDateProperty(`Inclusive start date in YYYY-MM-DD format. Ranges are capped at ${CURRENT_USER_RANGE_MAX_DAYS} days.`),
+          end_date: isoDateProperty('Inclusive end date in YYYY-MM-DD format.'),
+          ...pageProperties(),
+        },
+        required: ['start_date', 'end_date'],
+        additionalProperties: false,
+      },
+      budgetPolicy: {
+        page_size_default: DEFAULT_PAGE_SIZE,
+        page_size_max: MAX_PAGE_SIZE,
+      },
+      handler: ({ args, client, config, helpers, requestInfo }) => runCurrentUserEventListBetweenDates({
+        args,
+        client,
+        config,
+        helpers,
+        requestInfo,
       }),
     },
   ];

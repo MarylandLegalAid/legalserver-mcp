@@ -6,7 +6,9 @@ const MAX_PAGE_SIZE = 25;
 const DEFAULT_MAX_CHARS = 6000;
 const MAX_MAX_CHARS = 12000;
 const PREVIEW_MAX_CHARS = 300;
+const CURRENT_USER_RANGE_MAX_DAYS = 7;
 const EVENT_DATE_FALLBACK_MAX_PAGES = 20;
+const MATTER_CURRENT_USER_SCAN_MAX_PAGES = 10;
 const TASK_CURRENT_USER_SCAN_MAX_PAGES = 20;
 const MAX_DOCUMENT_BYTES = 50 * 1024 * 1024;
 const DOCUMENT_CHUNK_TARGET_CHARS = 4000;
@@ -37,6 +39,7 @@ const READ_ONLY_ENDPOINTS = new Set([
   '/api/v1/contacts/{contact_UUID}',
   '/api/v1/users',
   '/api/v1/users/{user_uuid}',
+  '/api/v1/users/{user_uuid}/supervisors',
   '/api/v1/organizations',
   '/api/v1/organizations/{organization_uuid}',
 ]);
@@ -64,27 +67,35 @@ const CANONICAL_TOOL_NAMES = [
   'task_get',
   'task_list_on_date',
   'task_list_current_user_on_date',
+  'task_list_current_user_between_dates',
   'event_search',
   'event_get',
   'event_list_by_date',
+  'event_list_current_user_on_date',
+  'event_list_current_user_between_dates',
   'contact_search',
   'contact_get',
   'contact_lookup_by_email',
   'user_search',
   'user_get',
+  'user_get_current',
+  'user_list_current_user_supervisors',
   'user_lookup_by_login',
   'organization_search',
   'organization_get',
   'organization_lookup_by_name',
+  'matter_list_current_user',
 ];
 
 module.exports = {
   CANONICAL_TOOL_NAMES,
+  CURRENT_USER_RANGE_MAX_DAYS,
   DEFAULT_MAX_CHARS,
   DEFAULT_PAGE,
   DEFAULT_PAGE_SIZE,
   DEFAULT_TIMEOUT_MS,
   EVENT_DATE_FALLBACK_MAX_PAGES,
+  MATTER_CURRENT_USER_SCAN_MAX_PAGES,
   TASK_CURRENT_USER_SCAN_MAX_PAGES,
   DOCUMENT_CHUNK_BOUNDARY_LOOKBACK_CHARS,
   DOCUMENT_CHUNK_OVERLAP_CHARS,
