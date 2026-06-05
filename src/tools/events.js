@@ -1,6 +1,6 @@
 const {
-  CURRENT_USER_RANGE_MAX_DAYS,
   DEFAULT_PAGE_SIZE,
+  EVENT_CURRENT_USER_API_FALLBACK_RANGE_MAX_DAYS,
   EVENT_DATE_FALLBACK_MAX_PAGES,
   MAX_PAGE_SIZE,
 } = require('../constants');
@@ -12,7 +12,7 @@ const {
   normalizeUserRef,
   runPaginatedSearch,
 } = require('./shared/globalDiscovery');
-const { currentUserMatchesUserRef, resolveCurrentUser } = require('./shared/currentUser');
+const { currentUserMatchesUserRef, readHeaderValue, resolveCurrentUser } = require('./shared/currentUser');
 
 function mapEventSummary(record, helpers) {
   const attendees = helpers.normalizeArrayValue(record.attendees).map(normalizeUserRef).filter(Boolean);
@@ -54,6 +54,47 @@ function mapCurrentUserEventSummary(record, helpers) {
     ...mapEventSummary(record, helpers),
     matters: helpers.normalizeArrayValue(record.matters).map(normalizeMatterRef).filter(Boolean),
     outreaches: helpers.normalizeArrayValue(record.outreaches).map(normalizeOutreachRef).filter(Boolean),
+  };
+}
+
+function mapReportBoolean(value) {
+  if (typeof value === 'boolean') {
+    return value;
+  }
+
+  const normalized = String(value ?? '').trim().toLowerCase();
+  if (normalized === 't' || normalized === 'true' || normalized === '1' || normalized === 'yes') {
+    return true;
+  }
+  if (normalized === 'f' || normalized === 'false' || normalized === '0' || normalized === 'no') {
+    return false;
+  }
+
+  return value ?? null;
+}
+
+function mapCurrentUserEventReportRow(row, helpers) {
+  return {
+    event_uuid: row.unique_id ?? row.event_uuid ?? null,
+    id: row.id ?? null,
+    external_id: row.external_id ?? null,
+    title: row.title ?? null,
+    start_datetime: helpers.normalizeDateValue(row.time_start ?? row.start_datetime),
+    end_datetime: helpers.normalizeDateValue(row.time_end ?? row.end_datetime),
+    all_day_event: mapReportBoolean(row.all_day ?? row.all_day_event),
+    private_event: mapReportBoolean(row.private_event),
+    front_desk: mapReportBoolean(row.front_desk),
+    location: row.location ?? null,
+    courtroom: row.courtroom ?? null,
+    court: normalizeOrganizationRef(row.court),
+    judge: row.judge ?? null,
+    event_type: row.event_builtin_lookup_event_type_event_type_expn ?? row.event_type ?? null,
+    office: helpers.normalizeOffice(row.office),
+    program: row.program ?? null,
+    attendee_count: row.email ? 1 : 0,
+    matter_count: 0,
+    matters: [],
+    outreaches: [],
   };
 }
 
@@ -120,6 +161,21 @@ function eventBelongsToCurrentUser(record, helpers, currentUser) {
   return helpers.normalizeArrayValue(record.attendees).some((attendee) => (
     currentUserMatchesUserRef(currentUser, attendee)
   ));
+}
+
+function readCurrentUserEmail({ config, helpers, requestInfo }) {
+  const headerName = config?.userEmailHeader || 'x-legalserver-user-email';
+  const email = readHeaderValue(requestInfo?.headers, headerName);
+
+  if (!email) {
+    throw new helpers.ToolError({
+      errorCode: 'missing_user_context',
+      message: `This tool requires the ${headerName} request header.`,
+      status: 400,
+    });
+  }
+
+  return email;
 }
 
 function compareCurrentUserEventSummaries(left, right) {
@@ -324,6 +380,19 @@ function buildCurrentUserEventEnvelope({ helpers, args, matches, warnings, trunc
 
 async function runCurrentUserEventListOnDate({ args, client, config, helpers, requestInfo }) {
   const date = helpers.validateIsoDate(args.date, 'date');
+
+  if (config?.currentUserEventsReportUrl) {
+    return runCurrentUserEventReportList({
+      args,
+      client,
+      config,
+      helpers,
+      requestInfo,
+      startDate: date,
+      endDate: date,
+    });
+  }
+
   const currentUser = await resolveCurrentUser({
     client,
     config,
@@ -382,11 +451,30 @@ async function runCurrentUserEventListOnDate({ args, client, config, helpers, re
 }
 
 async function runCurrentUserEventListBetweenDates({ args, client, config, helpers, requestInfo }) {
+  if (config?.currentUserEventsReportUrl) {
+    const startDate = helpers.validateIsoDate(args.start_date, 'start_date');
+    const endDate = helpers.validateIsoDate(args.end_date, 'end_date');
+    if (helpers.compareIsoDates(startDate, endDate, 'start_date', 'end_date') > 0) {
+      throw new Error('end_date must be on or after start_date');
+    }
+
+    return runCurrentUserEventReportList({
+      args,
+      client,
+      config,
+      helpers,
+      requestInfo,
+      startDate,
+      endDate,
+    });
+  }
+
   const dateRange = helpers.listInclusiveIsoDates(
     args.start_date,
     args.end_date,
-    CURRENT_USER_RANGE_MAX_DAYS,
+    EVENT_CURRENT_USER_API_FALLBACK_RANGE_MAX_DAYS,
   );
+
   const currentUser = await resolveCurrentUser({
     client,
     config,
@@ -448,6 +536,44 @@ async function runCurrentUserEventListBetweenDates({ args, client, config, helpe
     matches,
     warnings,
     truncated: truncatedDates.length > 0,
+  });
+}
+
+async function runCurrentUserEventReportList({
+  args,
+  client,
+  config,
+  helpers,
+  requestInfo,
+  startDate,
+  endDate,
+}) {
+  const email = readCurrentUserEmail({
+    config,
+    helpers,
+    requestInfo,
+  });
+
+  const response = await client.getReportJson(config.currentUserEventsReportUrl, {
+    query: {
+      'filter[person_email]': email,
+    },
+  });
+
+  const rows = Array.isArray(response.data) ? response.data : [];
+  const matches = rows
+    .filter((row) => eventOverlapsDateRange({
+      start_datetime: row.time_start ?? row.start_datetime,
+      end_datetime: row.time_end ?? row.end_datetime,
+    }, startDate, endDate))
+    .map((row) => mapCurrentUserEventReportRow(row, helpers));
+
+  return buildCurrentUserEventEnvelope({
+    helpers,
+    args,
+    matches,
+    warnings: [],
+    truncated: false,
   });
 }
 
@@ -602,7 +728,7 @@ function createEventTools() {
       inputSchema: {
         type: 'object',
         properties: {
-          start_date: isoDateProperty(`Inclusive start date in YYYY-MM-DD format. Ranges are capped at ${CURRENT_USER_RANGE_MAX_DAYS} days.`),
+          start_date: isoDateProperty(`Inclusive start date in YYYY-MM-DD format. The configured report-backed path accepts any range covered by the report; the legacy API fallback is capped at ${EVENT_CURRENT_USER_API_FALLBACK_RANGE_MAX_DAYS} days.`),
           end_date: isoDateProperty('Inclusive end date in YYYY-MM-DD format.'),
           ...pageProperties(),
         },

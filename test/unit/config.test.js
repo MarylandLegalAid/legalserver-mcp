@@ -4,6 +4,7 @@ const {
   loadConfig,
   normalizeBaseUrl,
   normalizeHeaderName,
+  normalizeOptionalUrl,
   parseAllowedHosts,
   parseHttpPort,
   parseMatterCurrentUserCacheTtl,
@@ -53,11 +54,14 @@ test('HTTP config defaults and validates values', () => {
   assert.equal(config.sharedSecret, null);
   assert.equal(config.sharedSecretHeader, 'x-legalserver-mcp-secret');
   assert.equal(config.userEmailHeader, 'x-legalserver-user-email');
+  assert.equal(config.currentUserEventsReportUrl, null);
   assert.equal(config.matterCurrentUserCacheTtlMs, 60000);
   assert.equal(config.matterCurrentUserFetchConcurrency, 4);
   assert.equal(parseHttpPort('8080'), 8080);
   assert.deepEqual(parseAllowedHosts(' legalserver-mcp, localhost , legalserver-mcp '), ['legalserver-mcp', 'localhost']);
   assert.equal(normalizeHeaderName(' X-Custom-User-Email '), 'x-custom-user-email');
+  assert.equal(normalizeOptionalUrl(' https://example.legalserver.org/report ', 'TEST_URL'), 'https://example.legalserver.org/report');
+  assert.throws(() => normalizeOptionalUrl('not a url', 'TEST_URL'), /TEST_URL/);
   assert.throws(() => parseHttpPort('70000'), /MCP_HTTP_PORT/);
 });
 
@@ -68,6 +72,7 @@ test('HTTP config parses optional host filtering and shared secret settings', ()
     MCP_ALLOWED_HOSTS: 'legalserver-mcp, localhost,127.0.0.1',
     MCP_SHARED_SECRET: 'super-secret',
     MCP_SHARED_SECRET_HEADER: ' X-LegalServer-Mcp-Secret ',
+    LEGALSERVER_CURRENT_USER_EVENTS_REPORT_URL: 'https://example.legalserver.org/modules/report/api_export.php?load=2744&api_key=key&filter%5Bperson_email%5D=',
     MATTER_CURRENT_USER_CACHE_TTL_MS: '120000',
     MATTER_CURRENT_USER_FETCH_CONCURRENCY: '6',
   });
@@ -75,6 +80,10 @@ test('HTTP config parses optional host filtering and shared secret settings', ()
   assert.deepEqual(config.allowedHosts, ['legalserver-mcp', 'localhost', '127.0.0.1']);
   assert.equal(config.sharedSecret, 'super-secret');
   assert.equal(config.sharedSecretHeader, 'x-legalserver-mcp-secret');
+  assert.equal(
+    config.currentUserEventsReportUrl,
+    'https://example.legalserver.org/modules/report/api_export.php?load=2744&api_key=key&filter%5Bperson_email%5D=',
+  );
   assert.equal(config.matterCurrentUserCacheTtlMs, 120000);
   assert.equal(config.matterCurrentUserFetchConcurrency, 6);
 });

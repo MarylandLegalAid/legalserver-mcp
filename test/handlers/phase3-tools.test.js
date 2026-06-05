@@ -665,6 +665,100 @@ test('event_list_current_user_on_date filters by attendee and returns matter con
   assert.equal(payload.data[0].outreaches[0].outreach_uuid, 'outreach-uuid-1');
 });
 
+test('event_list_current_user_between_dates uses configured report filtered by request email', async () => {
+  const { registry, calls } = createRegistry([
+    jsonResponse(200, {
+      data: [
+        {
+          id: 'old-event',
+          email: 'jordan@example.org',
+          title: 'Old report event',
+          location: 'Old room',
+          all_day: 'f',
+          time_start: '2026-03-01T09:00:00-00:00',
+          time_end: '2026-03-01T10:00:00-00:00',
+          event_builtin_lookup_event_type_event_type_expn: 'General',
+          unique_id: 'old-event-uuid',
+        },
+        {
+          id: 'report-event',
+          email: 'jordan@example.org',
+          title: 'Report Hearing',
+          location: 'Courtroom B',
+          all_day: 't',
+          time_start: '2026-03-13T09:00:00-00:00',
+          time_end: '2026-03-13T10:00:00-00:00',
+          event_builtin_lookup_event_type_event_type_expn: 'Hearing',
+          unique_id: 'report-event-uuid',
+        },
+      ],
+    }),
+  ], {
+    config: {
+      currentUserEventsReportUrl: 'https://example.legalserver.org/modules/report/api_export.php?load=2744&api_key=report-key&filter%5Bperson_email%5D=',
+    },
+  });
+
+  const payload = await registry.execute(
+    'event_list_current_user_between_dates',
+    { start_date: '2026-03-12', end_date: '2026-03-14' },
+    {
+      requestInfo: {
+        headers: {
+          'x-legalserver-user-email': 'JORDAN@EXAMPLE.ORG',
+        },
+      },
+    },
+  );
+
+  assert.deepEqual(payload.data.map((item) => item.event_uuid), ['report-event-uuid']);
+  assert.equal(payload.data[0].title, 'Report Hearing');
+  assert.equal(payload.data[0].all_day_event, true);
+  assert.equal(payload.data[0].event_type, 'Hearing');
+  assert.equal(payload.truncated, false);
+
+  assert.equal(calls.length, 1);
+  const reportUrl = new URL(calls[0].url);
+  assert.equal(reportUrl.pathname, '/modules/report/api_export.php');
+  assert.equal(reportUrl.searchParams.get('load'), '2744');
+  assert.equal(reportUrl.searchParams.get('api_key'), 'report-key');
+  assert.equal(reportUrl.searchParams.get('filter[person_email]'), 'JORDAN@EXAMPLE.ORG');
+});
+
+test('event_list_current_user_between_dates allows broad ranges when using the configured report', async () => {
+  const { registry } = createRegistry([
+    jsonResponse(200, {
+      data: [{
+        id: 'report-event',
+        email: 'jordan@example.org',
+        title: 'Future report hearing',
+        all_day: 'f',
+        time_start: '2026-08-15T09:00:00-00:00',
+        time_end: '2026-08-15T10:00:00-00:00',
+        unique_id: 'future-report-event-uuid',
+      }],
+    }),
+  ], {
+    config: {
+      currentUserEventsReportUrl: 'https://example.legalserver.org/modules/report/api_export.php?load=2744&api_key=report-key&filter%5Bperson_email%5D=',
+    },
+  });
+
+  const payload = await registry.execute(
+    'event_list_current_user_between_dates',
+    { start_date: '2026-01-01', end_date: '2026-12-31' },
+    {
+      requestInfo: {
+        headers: {
+          'x-legalserver-user-email': 'jordan@example.org',
+        },
+      },
+    },
+  );
+
+  assert.deepEqual(payload.data.map((item) => item.event_uuid), ['future-report-event-uuid']);
+});
+
 test('event_list_current_user_between_dates falls back once and deduplicates range results', async () => {
   const spanningCurrentUserEvent = {
     ...sampleCurrentUserEvent,

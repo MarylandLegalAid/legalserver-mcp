@@ -17,6 +17,7 @@ Version: `3.0.0`
   - `MCP_SHARED_SECRET` (recommended for production)
   - `MCP_SHARED_SECRET_HEADER` (default `x-legalserver-mcp-secret`)
   - `LEGALSERVER_USER_EMAIL_HEADER` (default `x-legalserver-user-email`)
+  - `LEGALSERVER_CURRENT_USER_EVENTS_REPORT_URL` (optional Reports API URL for current-user event tools)
   - `MATTER_CURRENT_USER_CACHE_TTL_MS` (default `60000`, `0` disables current-user matter caching)
   - `MATTER_CURRENT_USER_FETCH_CONCURRENCY` (default `4`, max `8`)
 - Optional OCR:
@@ -54,6 +55,7 @@ MCP_ALLOWED_HOSTS=legalserver-mcp,localhost,127.0.0.1
 MCP_SHARED_SECRET=replace-me
 MCP_SHARED_SECRET_HEADER=x-legalserver-mcp-secret
 LEGALSERVER_USER_EMAIL_HEADER=x-legalserver-user-email
+LEGALSERVER_CURRENT_USER_EVENTS_REPORT_URL=
 MATTER_CURRENT_USER_CACHE_TTL_MS=60000
 MATTER_CURRENT_USER_FETCH_CONCURRENCY=4
 DOCUMENT_OCR_PROVIDER=none
@@ -122,6 +124,7 @@ Phase 3 global discovery tools:
 All list/search tools default to `page=1` and `page_size=10`. `page_size` is capped at `25`.
 Exact-match convenience lookups return `404 not_found` when no exact match exists and `409 multiple_matches` when more than one exact match is found.
 Some LegalServer tenants reject the documented `/api/v1/events?date=...` filter. When that happens, `event_search` and `event_list_by_date` fall back to a bounded local date filter over descending event pages and emit warnings describing the scanned window.
+When `LEGALSERVER_CURRENT_USER_EVENTS_REPORT_URL` is set, `event_list_current_user_on_date` and `event_list_current_user_between_dates` use that LegalServer Reports API URL with `filter[person_email]` set from the forwarded current-user email header, then apply the requested date window locally. The URL should be tenant-specific and kept in `.env` because it contains a report API key.
 
 ## Benchmarking
 

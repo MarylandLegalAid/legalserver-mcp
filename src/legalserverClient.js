@@ -240,6 +240,54 @@ class LegalServerClient {
     return normalizeEnvelope(rawPayload);
   }
 
+  validateReportApiUrl(rawUrl) {
+    let parsed;
+    try {
+      parsed = new URL(rawUrl);
+    } catch (error) {
+      throw new Error('LegalServer report URL is invalid.');
+    }
+
+    const baseUrl = new URL(this.baseUrl);
+    if (parsed.origin !== baseUrl.origin || parsed.pathname !== '/modules/report/api_export.php') {
+      throw new Error('LegalServer report URL must use the configured LegalServer host and /modules/report/api_export.php path.');
+    }
+
+    if (!parsed.searchParams.get('load') || !parsed.searchParams.get('api_key')) {
+      throw new Error('LegalServer report URL must include load and api_key query parameters.');
+    }
+
+    return parsed;
+  }
+
+  async getReportJson(reportUrl, { query, accept } = {}) {
+    const url = this.validateReportApiUrl(reportUrl);
+
+    for (const [key, value] of Object.entries(query || {})) {
+      if (value === undefined || value === null || value === '') {
+        continue;
+      }
+      url.searchParams.set(key, String(value));
+    }
+
+    const response = await this.fetchImpl(url.toString(), {
+      method: 'GET',
+      headers: this.createHeaders(accept),
+      signal: AbortSignal.timeout(this.timeoutMs),
+    });
+
+    if (!response.ok) {
+      throw await parseLegalServerError(response);
+    }
+
+    const contentType = response.headers.get('content-type') || '';
+    const rawPayload = contentType.includes('application/json')
+      ? await response.json()
+      : await response.text();
+
+    return normalizeEnvelope(rawPayload);
+  }
+
   validateBinaryDownloadUrl(rawUrl) {
     let parsed;
     try {

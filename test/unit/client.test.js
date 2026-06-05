@@ -119,6 +119,47 @@ test('client rejects non-allowlisted endpoints', async () => {
   await assert.rejects(() => client.getJson('/api/v1/timekeeping'), /not allowlisted/);
 });
 
+test('client fetches same-origin report API URLs with filter query overrides', async () => {
+  const calls = [];
+  const client = createClient(createSequentialFetch([
+    jsonResponse(200, { data: [{ id: '1' }] }),
+  ], calls));
+
+  const result = await client.getReportJson(
+    'https://example.legalserver.org/modules/report/api_export.php?load=2744&api_key=key&filter%5Bperson_email%5D=',
+    {
+      query: {
+        'filter[person_email]': 'user@example.org',
+      },
+    },
+  );
+
+  assert.deepEqual(result.data, [{ id: '1' }]);
+  const url = new URL(calls[0].url);
+  assert.equal(url.pathname, '/modules/report/api_export.php');
+  assert.equal(url.searchParams.get('load'), '2744');
+  assert.equal(url.searchParams.get('api_key'), 'key');
+  assert.equal(url.searchParams.get('filter[person_email]'), 'user@example.org');
+  assert.equal(calls[0].options.headers.Authorization, 'Bearer token');
+});
+
+test('client rejects report API URLs outside the configured LegalServer origin and path', async () => {
+  const client = createClient(async () => jsonResponse(200, {}));
+
+  assert.throws(
+    () => client.validateReportApiUrl('https://evil.example.org/modules/report/api_export.php?load=1&api_key=key'),
+    /configured LegalServer host/,
+  );
+  assert.throws(
+    () => client.validateReportApiUrl('https://example.legalserver.org/api/v1/events?load=1&api_key=key'),
+    /configured LegalServer host/,
+  );
+  assert.throws(
+    () => client.validateReportApiUrl('https://example.legalserver.org/modules/report/api_export.php?load=1'),
+    /load and api_key/,
+  );
+});
+
 test('client maps LegalServer errors including retry-after', async () => {
   const client = createClient(createSequentialFetch([
     jsonResponse(429, { message: 'Slow down' }, { 'retry-after': '12' }),

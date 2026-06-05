@@ -104,6 +104,19 @@ function normalizeOptionalString(value) {
   return normalized || null;
 }
 
+function normalizeOptionalUrl(value, fieldName) {
+  const normalized = normalizeOptionalString(value);
+  if (!normalized) {
+    return null;
+  }
+
+  try {
+    return new URL(normalized).toString();
+  } catch (error) {
+    throw new Error(`${fieldName} must be a valid URL`);
+  }
+}
+
 function normalizeHeaderName(rawHeader, fallback = 'x-legalserver-user-email') {
   const headerName = normalizeOptionalString(rawHeader) || fallback;
   return headerName.toLowerCase();
@@ -154,6 +167,10 @@ function loadConfig(env) {
     sharedSecret: normalizeOptionalString(env.MCP_SHARED_SECRET),
     sharedSecretHeader: normalizeHeaderName(env.MCP_SHARED_SECRET_HEADER, 'x-legalserver-mcp-secret'),
     userEmailHeader: normalizeHeaderName(env.LEGALSERVER_USER_EMAIL_HEADER),
+    currentUserEventsReportUrl: normalizeOptionalUrl(
+      env.LEGALSERVER_CURRENT_USER_EVENTS_REPORT_URL,
+      'LEGALSERVER_CURRENT_USER_EVENTS_REPORT_URL',
+    ),
     matterCurrentUserCacheTtlMs: parseMatterCurrentUserCacheTtl(env.MATTER_CURRENT_USER_CACHE_TTL_MS),
     matterCurrentUserFetchConcurrency: parseMatterCurrentUserFetchConcurrency(env.MATTER_CURRENT_USER_FETCH_CONCURRENCY),
   };
@@ -166,6 +183,7 @@ module.exports = {
   parseMatterCurrentUserFetchConcurrency,
   normalizeHeaderName,
   normalizeOptionalString,
+  normalizeOptionalUrl,
   normalizeBaseUrl,
   parseNonNegativeInteger,
   parseOcrProvider,
