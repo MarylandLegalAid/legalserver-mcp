@@ -1,9 +1,9 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { jsonResponse } = require('../support/mockFetch');
-const { createBenchmarkTelemetry } = require('../../src/benchmark/telemetry');
-const { buildRunResult, summarizeScenarioRuns, buildMarkdownReport } = require('../../src/benchmark/summary');
-const { buildBenchmarkScenarios } = require('../../src/benchmark/scenarios');
+const { createBenchmarkTelemetry } = require('../../src/apps/legalserver/benchmark/telemetry');
+const { buildRunResult, summarizeScenarioRuns, buildMarkdownReport } = require('../../src/apps/legalserver/benchmark/summary');
+const { buildBenchmarkScenarios } = require('../../src/apps/legalserver/benchmark/scenarios');
 
 test('benchmark telemetry records upstream requests with page and document metrics', async () => {
   const telemetry = createBenchmarkTelemetry(async (url) => jsonResponse(200, {

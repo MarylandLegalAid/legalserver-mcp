@@ -2,12 +2,12 @@
 
 require('dotenv').config({ quiet: true });
 
-const { loadConfig } = require('../src/config');
-const helpers = require('../src/helpers');
-const { LegalServerClient } = require('../src/legalserverClient');
-const { createDocumentTextPipeline } = require('../src/documentText');
-const { createOcrProvider } = require('../src/documentText/ocrProviders');
-const { createToolRegistry } = require('../src/toolRegistry');
+const { loadConfig } = require('../src/apps/legalserver/config');
+const helpers = require('../src/apps/legalserver/helpers');
+const { LegalServerClient } = require('../src/apps/legalserver/legalserverClient');
+const { createDocumentTextPipeline } = require('../src/apps/legalserver/documentText');
+const { createOcrProvider } = require('../src/apps/legalserver/documentText/ocrProviders');
+const { createToolRegistry } = require('../src/apps/legalserver/toolRegistry');
 
 function parseArgs(argv) {
   const parsed = {};

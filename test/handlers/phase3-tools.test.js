@@ -1,8 +1,8 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const helpers = require('../../src/helpers');
-const { LegalServerClient } = require('../../src/legalserverClient');
-const { createToolRegistry } = require('../../src/toolRegistry');
+const helpers = require('../../src/apps/legalserver/helpers');
+const { LegalServerClient } = require('../../src/apps/legalserver/legalserverClient');
+const { createToolRegistry } = require('../../src/apps/legalserver/toolRegistry');
 const { createSequentialFetch, jsonResponse } = require('../support/mockFetch');
 
 function createRegistry(responses, options = {}) {
@@ -567,6 +567,176 @@ test('task_list_current_user_between_dates rejects ranges longer than seven days
     ),
     /cannot exceed 7 day\(s\)/i,
   );
+});
+
+test('current-user task tools use configured report filters and map report rows', async () => {
+  const reportRows = [
+    {
+      todo_id: '201',
+      todo_unique_id: 'report-task-uuid-1',
+      todo_title: 'Call client',
+      todo_active: '1',
+      todo_completed: '0',
+      todo_deadline: '0',
+      todo_list_date: '2026-03-12',
+      todo_due_date: '2026-03-12',
+      todo_task_type: 'Follow Up',
+      todo_users_name: 'Jordan Staff',
+      matter_uuid: 'matter-uuid-1',
+      case_number: '24-0001',
+      office: 'Main Office',
+      program: 'Housing',
+    },
+    {
+      todo_id: '202',
+      todo_unique_id: 'report-task-other-date',
+      todo_title: 'Other date',
+      todo_completed: '0',
+      todo_deadline: '0',
+      todo_list_date: '2026-03-13',
+      todo_due_date: '2026-03-13',
+    },
+    {
+      todo_id: '203',
+      todo_unique_id: 'report-task-deadline',
+      todo_title: 'Deadline',
+      todo_completed: '0',
+      todo_deadline: '1',
+      todo_list_date: '2026-03-12',
+      todo_due_date: '2026-03-12',
+    },
+  ];
+  const { registry, calls } = createRegistry(
+    [jsonResponse(200, reportRows)],
+    {
+      config: {
+        currentUserTasksReportUrl: 'https://example.legalserver.org/modules/report/api_export.php?load=2777&api_key=task-report-key&filter%5Btodo_completed%5D%5Bboolvalue%5D=&filter%5Btodo_users_email%5D=',
+      },
+    },
+  );
+
+  const payload = await registry.execute(
+    'task_list_current_user_on_date',
+    { date: '2026-03-12', deadline: false },
+    {
+      requestInfo: {
+        headers: { 'x-legalserver-user-email': 'JORDAN@EXAMPLE.ORG' },
+      },
+    },
+  );
+
+  assert.deepEqual(payload.data.map((item) => item.task_uuid), ['report-task-uuid-1']);
+  assert.equal(payload.data[0].completed, false);
+  assert.equal(payload.data[0].deadline, false);
+  assert.equal(payload.data[0].module.module_type, 'matter');
+  assert.equal(payload.data[0].module.uuid, 'matter-uuid-1');
+  assert.equal(payload.data[0].module.label, '24-0001');
+  assert.equal(calls.length, 1);
+
+  const reportUrl = new URL(calls[0].url);
+  assert.equal(reportUrl.searchParams.get('filter[todo_users_email]'), 'JORDAN@EXAMPLE.ORG');
+  assert.equal(reportUrl.searchParams.get('filter[todo_completed][boolvalue]'), null);
+});
+
+test('report-backed current-user task ranges can include completed tasks over broad ranges', async () => {
+  const { registry, calls } = createRegistry(
+    [jsonResponse(200, [
+      {
+        todo_unique_id: 'incomplete-task',
+        todo_title: 'Incomplete',
+        todo_completed: '0',
+        todo_list_date: '2026-03-01',
+        todo_due_date: '2026-03-01',
+      },
+      {
+        todo_unique_id: 'completed-task',
+        todo_title: 'Completed',
+        todo_completed: '1',
+        todo_list_date: '2026-03-20',
+        todo_due_date: '2026-03-20',
+        todo_completed_date: '2026-03-21',
+      },
+    ])],
+    {
+      config: {
+        currentUserTasksReportUrl: 'https://example.legalserver.org/modules/report/api_export.php?load=2777&api_key=task-report-key&filter%5Btodo_completed%5D%5Bboolvalue%5D=&filter%5Btodo_users_email%5D=',
+      },
+    },
+  );
+
+  const payload = await registry.execute(
+    'task_list_current_user_between_dates',
+    {
+      start_date: '2026-03-01',
+      end_date: '2026-03-31',
+      completed: true,
+    },
+    {
+      requestInfo: {
+        headers: { 'x-legalserver-user-email': 'jordan@example.org' },
+      },
+    },
+  );
+
+  assert.deepEqual(payload.data.map((item) => item.task_uuid), [
+    'incomplete-task',
+    'completed-task',
+  ]);
+  assert.equal(calls.length, 1);
+  const reportUrl = new URL(calls[0].url);
+  assert.equal(reportUrl.searchParams.get('filter[todo_completed][boolvalue]'), null);
+});
+
+test('report-backed current-user tasks map and locally filter the live due-date schema', async () => {
+  const { registry } = createRegistry(
+    [jsonResponse(200, [{
+      id: '301',
+      unique_id: 'live-schema-task',
+      email: 'jordan@example.org',
+      title: 'Live schema task',
+      deadline: '0',
+      todo_builtin_lookup_task_type_type_expn: 'Follow Up',
+      date_due: '3/12/2026',
+      completed: '0',
+      date_completed: '3/21/2026',
+    }])],
+    {
+      config: {
+        currentUserTasksReportUrl: 'https://example.legalserver.org/modules/report/api_export.php?load=2777&api_key=task-report-key&filter%5Btodo_completed%5D%5Bboolvalue%5D=&filter%5Btodo_users_email%5D=',
+      },
+    },
+  );
+
+  const payload = await registry.execute(
+    'task_list_current_user_on_date',
+    { date: '2026-03-12' },
+    {
+      requestInfo: {
+        headers: { 'x-legalserver-user-email': 'jordan@example.org' },
+      },
+    },
+  );
+
+  assert.equal(payload.data[0].task_uuid, 'live-schema-task');
+  assert.equal(payload.data[0].list_date, null);
+  assert.equal(payload.data[0].due_date, '2026-03-12');
+  assert.equal(payload.data[0].completed_date, '2026-03-21');
+  assert.equal(payload.data[0].task_type, 'Follow Up');
+  assert.deepEqual(payload.warnings, []);
+});
+
+test('report-backed current-user tasks require the forwarded email header without user lookup', async () => {
+  const { registry, calls } = createRegistry([], {
+    config: {
+      currentUserTasksReportUrl: 'https://example.legalserver.org/modules/report/api_export.php?load=2777&api_key=task-report-key',
+    },
+  });
+
+  await assert.rejects(
+    () => registry.execute('task_list_current_user_on_date', { date: '2026-03-12' }),
+    (error) => error.errorCode === 'missing_user_context' && error.status === 400,
+  );
+  assert.equal(calls.length, 0);
 });
 
 test('task_get returns phase 3 detail fields', async () => {

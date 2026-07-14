@@ -1,11 +1,11 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const helpers = require('../../src/helpers');
+const helpers = require('../../src/apps/legalserver/helpers');
 const {
   getDocumentTextStrategy,
   mapDocumentRecord,
   sortMatterDocumentsForSearch,
-} = require('../../src/tools/shared/documentRecords');
+} = require('../../src/apps/legalserver/tools/shared/documentRecords');
 
 test('document records map text_strategy from mime type or extension', () => {
   assert.equal(getDocumentTextStrategy({ mime_type: 'text/plain', name: 'notes.txt' }), 'direct');

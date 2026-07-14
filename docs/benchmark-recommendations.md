@@ -2,6 +2,8 @@
 
 This note summarizes the live production benchmark run from March 15, 2026 in plain language.
 
+Implementation status: report-backed current-user events and current-user tasks are now available when their corresponding report URL environment variables are configured. The timing observations below describe the original API-backed benchmark run.
+
 The detailed timing table is in [tool-latency.md](/home/john/repos/legalserver-mcp/docs/tool-latency.md). The raw benchmark artifact is stored locally under `.bench/results/` and is intentionally not committed.
 
 ## What Stood Out

@@ -1,8 +1,8 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { LegalServerClient } = require('../../src/legalserverClient');
-const helpers = require('../../src/helpers');
-const { createToolRegistry } = require('../../src/toolRegistry');
+const { LegalServerClient } = require('../../src/apps/legalserver/legalserverClient');
+const helpers = require('../../src/apps/legalserver/helpers');
+const { createToolRegistry } = require('../../src/apps/legalserver/toolRegistry');
 const { createSequentialFetch, jsonResponse } = require('../support/mockFetch');
 
 function createRegistry(fetchImpl, overrides = {}) {

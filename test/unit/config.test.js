@@ -11,7 +11,7 @@ const {
   parseMatterCurrentUserFetchConcurrency,
   parseOcrProvider,
   parseTimeout,
-} = require('../../src/config');
+} = require('../../src/apps/legalserver/config');
 
 test('normalizeBaseUrl validates and normalizes trailing slash', () => {
   assert.equal(normalizeBaseUrl('https://example.legalserver.org'), 'https://example.legalserver.org/');
@@ -55,6 +55,7 @@ test('HTTP config defaults and validates values', () => {
   assert.equal(config.sharedSecretHeader, 'x-legalserver-mcp-secret');
   assert.equal(config.userEmailHeader, 'x-legalserver-user-email');
   assert.equal(config.currentUserEventsReportUrl, null);
+  assert.equal(config.currentUserTasksReportUrl, null);
   assert.equal(config.matterCurrentUserCacheTtlMs, 60000);
   assert.equal(config.matterCurrentUserFetchConcurrency, 4);
   assert.equal(parseHttpPort('8080'), 8080);
@@ -63,6 +64,13 @@ test('HTTP config defaults and validates values', () => {
   assert.equal(normalizeOptionalUrl(' https://example.legalserver.org/report ', 'TEST_URL'), 'https://example.legalserver.org/report');
   assert.throws(() => normalizeOptionalUrl('not a url', 'TEST_URL'), /TEST_URL/);
   assert.throws(() => parseHttpPort('70000'), /MCP_HTTP_PORT/);
+
+  const renderConfig = loadConfig({
+    LEGALSERVER_BASE_URL: 'https://example.legalserver.org/',
+    LEGALSERVER_BEARER_TOKEN: 'token',
+    PORT: '10000',
+  });
+  assert.equal(renderConfig.httpPort, 10000);
 });
 
 test('HTTP config parses optional host filtering and shared secret settings', () => {
@@ -73,6 +81,7 @@ test('HTTP config parses optional host filtering and shared secret settings', ()
     MCP_SHARED_SECRET: 'super-secret',
     MCP_SHARED_SECRET_HEADER: ' X-LegalServer-Mcp-Secret ',
     LEGALSERVER_CURRENT_USER_EVENTS_REPORT_URL: 'https://example.legalserver.org/modules/report/api_export.php?load=2744&api_key=key&filter%5Bperson_email%5D=',
+    LEGALSERVER_CURRENT_USER_TASKS_REPORT_URL: 'https://example.legalserver.org/modules/report/api_export.php?load=2777&api_key=task-key&filter%5Btodo_users_email%5D=',
     MATTER_CURRENT_USER_CACHE_TTL_MS: '120000',
     MATTER_CURRENT_USER_FETCH_CONCURRENCY: '6',
   });
@@ -83,6 +92,10 @@ test('HTTP config parses optional host filtering and shared secret settings', ()
   assert.equal(
     config.currentUserEventsReportUrl,
     'https://example.legalserver.org/modules/report/api_export.php?load=2744&api_key=key&filter%5Bperson_email%5D=',
+  );
+  assert.equal(
+    config.currentUserTasksReportUrl,
+    'https://example.legalserver.org/modules/report/api_export.php?load=2777&api_key=task-key&filter%5Btodo_users_email%5D=',
   );
   assert.equal(config.matterCurrentUserCacheTtlMs, 120000);
   assert.equal(config.matterCurrentUserFetchConcurrency, 6);

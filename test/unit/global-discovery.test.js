@@ -1,6 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const helpers = require('../../src/helpers');
+const helpers = require('../../src/apps/legalserver/helpers');
 const {
   collapseWhitespace,
   findExactMatch,
@@ -10,7 +10,7 @@ const {
   normalizeOrganizationRef,
   normalizeTypeList,
   normalizeUserRef,
-} = require('../../src/tools/shared/globalDiscovery');
+} = require('../../src/apps/legalserver/tools/shared/globalDiscovery');
 
 test('phase 3 normalizers flatten common nested references', () => {
   assert.deepEqual(normalizeUserRef({

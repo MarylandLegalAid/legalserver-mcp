@@ -11,7 +11,11 @@ const {
   normalizeUserRef,
   runPaginatedSearch,
 } = require('./shared/globalDiscovery');
-const { currentUserMatchesUserRef, resolveCurrentUser } = require('./shared/currentUser');
+const {
+  currentUserMatchesUserRef,
+  readHeaderValue,
+  resolveCurrentUser,
+} = require('./shared/currentUser');
 
 function mapTaskSummary(record, helpers) {
   return {
@@ -42,6 +46,158 @@ function mapTaskDetail(record, helpers) {
     statute_of_limitations: record.statute_of_limitations ?? null,
     module: normalizeModuleDetail(record.module),
   };
+}
+
+function mapReportBoolean(value) {
+  if (typeof value === 'boolean') {
+    return value;
+  }
+
+  const normalized = String(value ?? '').trim().toLowerCase();
+  if (normalized === 't' || normalized === 'true' || normalized === '1' || normalized === 'yes') {
+    return true;
+  }
+  if (normalized === 'f' || normalized === 'false' || normalized === '0' || normalized === 'no') {
+    return false;
+  }
+
+  return value ?? null;
+}
+
+function normalizeReportDate(value, helpers) {
+  const normalized = helpers.normalizeDateValue(value);
+  const match = String(normalized ?? '').trim().match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})(.*)$/);
+  if (!match) {
+    return normalized;
+  }
+
+  const [, month, day, year, suffix] = match;
+  return `${year}-${month.padStart(2, '0')}-${day.padStart(2, '0')}${suffix}`;
+}
+
+function mapCurrentUserTaskReportRow(row, helpers) {
+  const completed = mapReportBoolean(row.todo_completed ?? row.completed);
+  const assignedUserName = row.todo_users_name
+    ?? row.todo_users_full_name
+    ?? row.user_name
+    ?? row.full_name
+    ?? row.email
+    ?? null;
+  const moduleType = row.module_type ?? row.todo_module_type ?? (row.matter_uuid ? 'matter' : null);
+  const module = moduleType || row.matter_uuid || row.case_uuid
+    ? {
+        module_type: moduleType,
+        id: row.module_id ?? row.todo_module_id ?? row.matter_id ?? row.case_id ?? null,
+        uuid: row.module_uuid ?? row.todo_module_uuid ?? row.matter_uuid ?? row.case_uuid ?? null,
+        label: row.case_number
+          ?? row.matter_identification_number
+          ?? row.module_name
+          ?? row.todo_module_name
+          ?? row.matter_name
+          ?? row.case_title
+          ?? null,
+      }
+    : null;
+
+  return {
+    task_uuid: row.todo_unique_id ?? row.unique_id ?? row.task_uuid ?? row.todo_uuid ?? null,
+    id: row.todo_id ?? row.id ?? row.task_id ?? null,
+    title: row.todo_title ?? row.title ?? row.task_title ?? null,
+    active: mapReportBoolean(row.todo_active ?? row.active) ?? (completed === null ? null : !completed),
+    completed,
+    deadline: mapReportBoolean(row.todo_deadline ?? row.deadline ?? row.is_deadline),
+    list_date: normalizeReportDate(
+      row.todo_list_date ?? row.list_date ?? row.task_list_date,
+      helpers,
+    ),
+    due_date: normalizeReportDate(row.todo_due_date ?? row.due_date ?? row.date_due, helpers),
+    completed_date: normalizeReportDate(
+      row.todo_completed_date ?? row.completed_date ?? row.date_completed,
+      helpers,
+    ),
+    task_type: row.todo_task_type
+      ?? row.task_type
+      ?? row.todo_builtin_lookup_task_type_type_expn
+      ?? null,
+    deadline_type: row.todo_deadline_type ?? row.deadline_type ?? null,
+    users: assignedUserName ? [{ user_uuid: null, id: null, name: assignedUserName }] : [],
+    module,
+    office: helpers.normalizeOffice(row.todo_office ?? row.office),
+    program: row.todo_program ?? row.program ?? null,
+    created_by: null,
+    completed_by: null,
+  };
+}
+
+function readCurrentUserEmail({ config, helpers, requestInfo }) {
+  const headerName = config?.userEmailHeader || 'x-legalserver-user-email';
+  const email = readHeaderValue(requestInfo?.headers, headerName);
+
+  if (!email) {
+    throw new helpers.ToolError({
+      errorCode: 'missing_user_context',
+      message: `This tool requires the ${headerName} request header.`,
+      status: 400,
+    });
+  }
+
+  return email;
+}
+
+function extractIsoDatePart(value) {
+  const match = String(value ?? '').match(/^(\d{4}-\d{2}-\d{2})/);
+  return match ? match[1] : null;
+}
+
+function taskSummaryKey(item) {
+  return item.task_uuid || String(item.id || `${item.title || 'task'}:${item.due_date || item.list_date || ''}`);
+}
+
+async function runCurrentUserTaskReportList({
+  args,
+  client,
+  config,
+  helpers,
+  requestInfo,
+  startDate,
+  endDate,
+}) {
+  const email = readCurrentUserEmail({ config, helpers, requestInfo });
+  const includeCompleted = args.completed === true;
+  const reportUrl = new URL(config.currentUserTasksReportUrl);
+  reportUrl.searchParams.delete('filter[todo_completed][boolvalue]');
+  reportUrl.searchParams.delete('filter[completed][boolvalue]');
+  const response = await client.getReportJson(reportUrl.toString(), {
+    query: {
+      'filter[todo_users_email]': email,
+    },
+  });
+  const rows = Array.isArray(response.data) ? response.data : [];
+  const deduped = new Map();
+
+  for (const row of rows) {
+    const mapped = mapCurrentUserTaskReportRow(row, helpers);
+    const dueDate = extractIsoDatePart(mapped.due_date);
+    if (!dueDate || dueDate < startDate || dueDate > endDate) {
+      continue;
+    }
+    if (!includeCompleted && mapped.completed === true) {
+      continue;
+    }
+    if (args.deadline !== undefined && mapped.deadline !== args.deadline) {
+      continue;
+    }
+
+    deduped.set(taskSummaryKey(mapped), mapped);
+  }
+
+  return buildCurrentUserTaskEnvelope({
+    helpers,
+    args,
+    matches: [...deduped.values()],
+    truncated: false,
+    warnings: [],
+  });
 }
 
 function taskBelongsToUser(record, currentUser, helpers) {
@@ -130,6 +286,18 @@ function buildCurrentUserTaskEnvelope({ helpers, args, matches, truncated, warni
 
 async function runCurrentUserTaskListOnDate({ args, client, config, helpers, requestInfo }) {
   const date = helpers.validateIsoDate(args.date, 'date');
+  if (config?.currentUserTasksReportUrl) {
+    return runCurrentUserTaskReportList({
+      args,
+      client,
+      config,
+      helpers,
+      requestInfo,
+      startDate: date,
+      endDate: date,
+    });
+  }
+
   const currentUser = await resolveCurrentUser({
     client,
     config,
@@ -161,6 +329,24 @@ async function runCurrentUserTaskListOnDate({ args, client, config, helpers, req
 }
 
 async function runCurrentUserTaskListBetweenDates({ args, client, config, helpers, requestInfo }) {
+  if (config?.currentUserTasksReportUrl) {
+    const startDate = helpers.validateIsoDate(args.start_date, 'start_date');
+    const endDate = helpers.validateIsoDate(args.end_date, 'end_date');
+    if (helpers.compareIsoDates(startDate, endDate, 'start_date', 'end_date') > 0) {
+      throw new Error('end_date must be on or after start_date');
+    }
+
+    return runCurrentUserTaskReportList({
+      args,
+      client,
+      config,
+      helpers,
+      requestInfo,
+      startDate,
+      endDate,
+    });
+  }
+
   const dateRange = helpers.listInclusiveIsoDates(
     args.start_date,
     args.end_date,
@@ -335,7 +521,7 @@ function createTaskTools() {
     },
     {
       name: 'task_list_current_user_on_date',
-      description: 'List tasks assigned to the current request user on one LegalServer list date.',
+      description: 'List tasks assigned to the current request user on one date. The report-backed path filters by Due Date locally; the legacy API fallback uses LegalServer list date.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -368,11 +554,11 @@ function createTaskTools() {
     },
     {
       name: 'task_list_current_user_between_dates',
-      description: 'List tasks assigned to the current request user across an inclusive date range.',
+      description: 'List tasks assigned to the current request user across an inclusive date range. The report-backed path filters by Due Date locally; the legacy API fallback uses LegalServer list date.',
       inputSchema: {
         type: 'object',
         properties: {
-          start_date: isoDateProperty(`Inclusive start date in YYYY-MM-DD format. Ranges are capped at ${CURRENT_USER_RANGE_MAX_DAYS} days.`),
+          start_date: isoDateProperty(`Inclusive start date in YYYY-MM-DD format. The configured report-backed path accepts any range covered by the report; the legacy API fallback is capped at ${CURRENT_USER_RANGE_MAX_DAYS} days.`),
           end_date: isoDateProperty('Inclusive end date in YYYY-MM-DD format.'),
           ...pageProperties(),
           completed: {

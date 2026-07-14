@@ -1,7 +1,7 @@
 const { performance } = require('node:perf_hooks');
 const { Client } = require('@modelcontextprotocol/sdk/client/index.js');
 const { StreamableHTTPClientTransport } = require('@modelcontextprotocol/sdk/client/streamableHttp.js');
-const { createHttpApp } = require('../httpServer');
+const { createHttpApp } = require('../../../httpServer');
 const { buildMarkdownReport, buildRunResult, summarizeScenarioRuns } = require('./summary');
 const { buildBenchmarkScenarios } = require('./scenarios');
 
@@ -131,7 +131,7 @@ async function startBenchmarkSession({ config, headers, fetchImpl }) {
   });
   const address = server.address();
   const transport = new StreamableHTTPClientTransport(
-    new URL(`http://127.0.0.1:${address.port}/mcp`),
+    new URL(`http://127.0.0.1:${address.port}/legalserver/mcp`),
     {
       requestInit: {
         headers,

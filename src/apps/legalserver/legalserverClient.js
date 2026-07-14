@@ -281,9 +281,16 @@ class LegalServerClient {
     }
 
     const contentType = response.headers.get('content-type') || '';
-    const rawPayload = contentType.includes('application/json')
-      ? await response.json()
-      : await response.text();
+    if (!contentType.includes('application/json')) {
+      await response.text();
+      throw new ToolError({
+        errorCode: 'upstream_error',
+        message: 'LegalServer report API returned a non-JSON response.',
+        status: 502,
+      });
+    }
+
+    const rawPayload = await response.json();
 
     return normalizeEnvelope(rawPayload);
   }

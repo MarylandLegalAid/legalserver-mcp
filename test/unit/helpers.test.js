@@ -1,6 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const helpers = require('../../src/helpers');
+const helpers = require('../../src/apps/legalserver/helpers');
 
 test('pagination helpers validate and cap values', () => {
   assert.equal(helpers.validatePage(undefined), 1);

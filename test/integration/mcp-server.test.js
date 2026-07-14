@@ -2,9 +2,9 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const { Client } = require('@modelcontextprotocol/sdk/client/index.js');
 const { InMemoryTransport } = require('@modelcontextprotocol/sdk/inMemory.js');
-const { ToolError } = require('../../src/helpers');
-const { createMcpServer } = require('../../src/mcpServer');
-const { CANONICAL_TOOL_NAMES } = require('../../src/constants');
+const { ToolError } = require('../../src/apps/legalserver/helpers');
+const { createMcpServer } = require('../../src/apps/legalserver/mcpServer');
+const { CANONICAL_TOOL_NAMES } = require('../../src/apps/legalserver/constants');
 const { jsonResponse } = require('../support/mockFetch');
 
 function parseToolResult(result) {

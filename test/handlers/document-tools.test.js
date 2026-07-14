@@ -1,9 +1,9 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const helpers = require('../../src/helpers');
-const { DocumentTextPipeline } = require('../../src/documentText');
-const { LegalServerClient } = require('../../src/legalserverClient');
-const { createToolRegistry } = require('../../src/toolRegistry');
+const helpers = require('../../src/apps/legalserver/helpers');
+const { DocumentTextPipeline } = require('../../src/apps/legalserver/documentText');
+const { LegalServerClient } = require('../../src/apps/legalserver/legalserverClient');
+const { createToolRegistry } = require('../../src/apps/legalserver/toolRegistry');
 const { binaryResponse, createSequentialFetch, jsonResponse, textResponse } = require('../support/mockFetch');
 
 const sampleDocuments = [

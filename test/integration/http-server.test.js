@@ -3,7 +3,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const { Client } = require('@modelcontextprotocol/sdk/client/index.js');
 const { StreamableHTTPClientTransport } = require('@modelcontextprotocol/sdk/client/streamableHttp.js');
-const { CANONICAL_TOOL_NAMES, SERVER_VERSION } = require('../../src/constants');
+const { CANONICAL_TOOL_NAMES, SERVER_VERSION } = require('../../src/apps/legalserver/constants');
 const { createHttpApp } = require('../../src/httpServer');
 const { jsonResponse } = require('../support/mockFetch');
 
@@ -100,8 +100,12 @@ test('HTTP server exposes an unauthenticated health endpoint', async () => {
     assert.equal(response.status, 200);
     assert.deepEqual(payload, {
       ok: true,
-      service: 'legalserver-mcp',
+      service: 'legal-tools-mcp',
       version: SERVER_VERSION,
+      apps: {
+        legalserver: true,
+        letter_writer: false,
+      },
     });
   } finally {
     server.close();
@@ -121,7 +125,7 @@ test('HTTP server rejects MCP calls when the shared secret header is missing', a
   const address = server.address();
 
   try {
-    const response = await fetch(`http://127.0.0.1:${address.port}/mcp`, {
+    const response = await fetch(`http://127.0.0.1:${address.port}/legalserver/mcp`, {
       method: 'POST',
       headers: {
         'content-type': 'application/json',
@@ -150,7 +154,7 @@ test('HTTP server rejects MCP calls when the shared secret header is invalid', a
   const address = server.address();
 
   try {
-    const response = await fetch(`http://127.0.0.1:${address.port}/mcp`, {
+    const response = await fetch(`http://127.0.0.1:${address.port}/legalserver/mcp`, {
       method: 'POST',
       headers: {
         'content-type': 'application/json',
@@ -307,7 +311,7 @@ test('HTTP server lists canonical tools and supports current-user task lookup', 
   const server = await startServer(app);
   const address = server.address();
   const transport = new StreamableHTTPClientTransport(
-    new URL(`http://127.0.0.1:${address.port}/mcp`),
+    new URL(`http://127.0.0.1:${address.port}/legalserver/mcp`),
     {
       requestInit: {
         headers: {

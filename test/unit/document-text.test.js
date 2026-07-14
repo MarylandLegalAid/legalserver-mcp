@@ -1,12 +1,12 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { ToolError } = require('../../src/helpers');
+const { ToolError } = require('../../src/apps/legalserver/helpers');
 const {
   DocumentTextPipeline,
   buildChunks,
   buildSearchHits,
   normalizeDocumentPages,
-} = require('../../src/documentText');
+} = require('../../src/apps/legalserver/documentText');
 
 function createPipeline(overrides = {}) {
   const downloads = [];

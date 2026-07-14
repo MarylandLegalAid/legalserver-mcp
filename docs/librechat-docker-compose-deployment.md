@@ -1,6 +1,6 @@
 # Deploying LegalServer MCP Alongside LibreChat With Docker Compose
 
-This guide walks through a complete Docker Compose deployment of the current HTTP-based `legalserver-mcp` branch alongside LibreChat.
+This guide covers the legacy private Docker Compose deployment path. The repository now hosts LegalServer and LetterWriter in one process; this guide configures the LegalServer endpoint only.
 
 It is written for the current deployment model:
 
@@ -23,7 +23,7 @@ At a high level, the deployment looks like this:
 
 ```text
 LibreChat container (service: api)
-  -> http://legalserver-mcp:3001/mcp
+  -> http://legalserver-mcp:3001/legalserver/mcp
   -> headers:
        X-LegalServer-Mcp-Secret: <shared secret>
        X-LegalServer-User-Email: <signed-in LibreChat user email>
@@ -191,7 +191,7 @@ Then add the MCP server itself:
 mcpServers:
   LegalServer:
     type: streamable-http
-    url: "http://legalserver-mcp:3001/mcp"
+    url: "http://legalserver-mcp:3001/legalserver/mcp"
     headers:
       X-LegalServer-Mcp-Secret: "${LEGALSERVER_MCP_SHARED_SECRET}"
       X-LegalServer-User-Email: "{{LIBRECHAT_USER_EMAIL}}"
@@ -243,7 +243,7 @@ docker compose logs --tail=100 legalserver-mcp
 You want to see a startup line like:
 
 ```text
-legalserver-mcp listening on http://0.0.0.0:3001/mcp
+LegalServer MCP endpoint: /legalserver/mcp
 ```
 
 If the container exits immediately, check for env issues first. The most common one is using `LEGALSERVER_API_TOKEN` instead of `LEGALSERVER_BEARER_TOKEN`.
@@ -266,7 +266,7 @@ Expected result:
 MCP endpoint check:
 
 ```bash
-docker compose exec api node -e "fetch('http://legalserver-mcp:3001/mcp').then(async (r) => { console.log(r.status); console.log(await r.text()); }).catch((e) => { console.error(e); process.exit(1); })"
+docker compose exec api node -e "fetch('http://legalserver-mcp:3001/legalserver/mcp').then(async (r) => { console.log(r.status); console.log(await r.text()); }).catch((e) => { console.error(e); process.exit(1); })"
 ```
 
 Expected result:
@@ -346,7 +346,7 @@ At this point all of these should be true:
 
 - `docker compose ps` shows `legalserver-mcp` healthy
 - `docker compose exec api ... /healthz` returns `200`
-- `docker compose exec api ... /mcp` returns `405`
+- `docker compose exec api ... /legalserver/mcp` returns `405`
 - LibreChat logs do not show allowlist or fetch errors
 - LibreChat can call at least one non-user-scoped LegalServer tool
 - LibreChat can call the current-user LegalServer tools
@@ -434,7 +434,7 @@ Check:
 - `docker compose ps`
 - `docker compose logs legalserver-mcp`
 - `docker compose exec api ... /healthz`
-- `docker compose exec api ... /mcp`
+- `docker compose exec api ... /legalserver/mcp`
 
 Typical root causes:
 
@@ -515,7 +515,7 @@ Before you consider the HTTP deployment complete:
 - confirm the MCP is running as `legalserver-mcp` in Compose
 - confirm the MCP has no published host port
 - confirm `/healthz` is `200` from inside the LibreChat container
-- confirm `/mcp` is `405` from inside the LibreChat container
+- confirm `/legalserver/mcp` is `405` from inside the LibreChat container
 - confirm one non-user-scoped tool works
 - confirm a current-user LegalServer tool works
 - confirm LibreChat logs are free of MCP allowlist and transport errors

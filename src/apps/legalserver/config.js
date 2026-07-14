@@ -162,7 +162,7 @@ function loadConfig(env) {
     googleCloudProject,
     googleCloudLocation: normalizeOptionalString(env.GOOGLE_CLOUD_LOCATION) || 'global',
     httpHost: normalizeOptionalString(env.MCP_HTTP_HOST) || '127.0.0.1',
-    httpPort: parseHttpPort(env.MCP_HTTP_PORT),
+    httpPort: parseHttpPort(env.PORT || env.MCP_HTTP_PORT),
     allowedHosts: parseAllowedHosts(env.MCP_ALLOWED_HOSTS),
     sharedSecret: normalizeOptionalString(env.MCP_SHARED_SECRET),
     sharedSecretHeader: normalizeHeaderName(env.MCP_SHARED_SECRET_HEADER, 'x-legalserver-mcp-secret'),
@@ -170,6 +170,10 @@ function loadConfig(env) {
     currentUserEventsReportUrl: normalizeOptionalUrl(
       env.LEGALSERVER_CURRENT_USER_EVENTS_REPORT_URL,
       'LEGALSERVER_CURRENT_USER_EVENTS_REPORT_URL',
+    ),
+    currentUserTasksReportUrl: normalizeOptionalUrl(
+      env.LEGALSERVER_CURRENT_USER_TASKS_REPORT_URL,
+      'LEGALSERVER_CURRENT_USER_TASKS_REPORT_URL',
     ),
     matterCurrentUserCacheTtlMs: parseMatterCurrentUserCacheTtl(env.MATTER_CURRENT_USER_CACHE_TTL_MS),
     matterCurrentUserFetchConcurrency: parseMatterCurrentUserFetchConcurrency(env.MATTER_CURRENT_USER_FETCH_CONCURRENCY),

@@ -15,7 +15,7 @@ ENV MCP_HTTP_PORT=3001
 EXPOSE 3001
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
-  CMD node -e "fetch('http://127.0.0.1:3001/healthz').then((response) => { if (!response.ok) { process.exit(1); } }).catch(() => process.exit(1));"
+  CMD node -e "fetch('http://127.0.0.1:' + (process.env.MCP_HTTP_PORT || process.env.PORT || 3001) + '/healthz').then((response) => { if (!response.ok) { process.exit(1); } }).catch(() => process.exit(1));"
 
 USER node
 

@@ -1,7 +1,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { LegalServerClient, normalizeEnvelope } = require('../../src/legalserverClient');
-const { toErrorEnvelope } = require('../../src/helpers');
+const { LegalServerClient, normalizeEnvelope } = require('../../src/apps/legalserver/legalserverClient');
+const { toErrorEnvelope } = require('../../src/apps/legalserver/helpers');
 const { binaryResponse, createSequentialFetch, jsonResponse, textResponse } = require('../support/mockFetch');
 
 function createClient(fetchImpl) {
@@ -141,6 +141,20 @@ test('client fetches same-origin report API URLs with filter query overrides', a
   assert.equal(url.searchParams.get('api_key'), 'key');
   assert.equal(url.searchParams.get('filter[person_email]'), 'user@example.org');
   assert.equal(calls[0].options.headers.Authorization, 'Bearer token');
+});
+
+test('client rejects HTML error pages returned with a successful report status', async () => {
+  const client = createClient(async () => new Response('<html>Support request</html>', {
+    status: 200,
+    headers: { 'content-type': 'text/html; charset=UTF-8' },
+  }));
+
+  await assert.rejects(
+    () => client.getReportJson(
+      'https://example.legalserver.org/modules/report/api_export.php?load=2777&api_key=key',
+    ),
+    (error) => error.errorCode === 'upstream_error' && error.status === 502,
+  );
 });
 
 test('client rejects report API URLs outside the configured LegalServer origin and path', async () => {

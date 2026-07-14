@@ -3,7 +3,7 @@
 require('dotenv').config({ quiet: true });
 
 const path = require('node:path');
-const { loadConfig } = require('../src/config');
+const { loadConfig } = require('../src/apps/legalserver/config');
 const {
   getFixturesPath,
   getResultsPath,
@@ -11,9 +11,9 @@ const {
   readJsonFile,
   writeJsonFile,
   writeTextFile,
-} = require('../src/benchmark/files');
-const { runBenchmarkSuite, renderSanitizedBenchmarkReport } = require('../src/benchmark/runner');
-const { createBenchmarkTelemetry } = require('../src/benchmark/telemetry');
+} = require('../src/apps/legalserver/benchmark/files');
+const { runBenchmarkSuite, renderSanitizedBenchmarkReport } = require('../src/apps/legalserver/benchmark/runner');
+const { createBenchmarkTelemetry } = require('../src/apps/legalserver/benchmark/telemetry');
 
 async function main() {
   const config = loadConfig(process.env);

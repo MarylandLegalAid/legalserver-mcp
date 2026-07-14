@@ -2,9 +2,9 @@
 
 require('dotenv').config({ quiet: true });
 
-const { loadConfig } = require('../src/config');
-const { discoverFixtures } = require('../src/benchmark/discovery');
-const { getFixturesPath, writeJsonFile } = require('../src/benchmark/files');
+const { loadConfig } = require('../src/apps/legalserver/config');
+const { discoverFixtures } = require('../src/apps/legalserver/benchmark/discovery');
+const { getFixturesPath, writeJsonFile } = require('../src/apps/legalserver/benchmark/files');
 
 async function main() {
   const config = loadConfig(process.env);

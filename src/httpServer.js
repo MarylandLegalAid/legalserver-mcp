@@ -1,120 +1,98 @@
 const { createMcpExpressApp } = require('@modelcontextprotocol/sdk/server/express.js');
-const { StreamableHTTPServerTransport } = require('@modelcontextprotocol/sdk/server/streamableHttp.js');
-const { SERVER_VERSION } = require('./constants');
-const { ToolError, toErrorEnvelope } = require('./helpers/errors');
-const { createMcpRuntime, createMcpServer } = require('./mcpServer');
+const { SERVER_VERSION } = require('./apps/legalserver/constants');
+const { createMcpRuntime, createMcpServer } = require('./apps/legalserver/mcpServer');
+const {
+  createLetterWriterMcpServer,
+  createLetterWriterRuntime,
+} = require('./apps/letterWriter/mcpServer');
+const { createSharedSecretMiddleware, mountStatelessMcpRoute } = require('./shared/http');
 
-function writeMethodNotAllowed(res) {
-  res.writeHead(405).end(JSON.stringify({
-    jsonrpc: '2.0',
-    error: {
-      code: -32000,
-      message: 'Method not allowed.',
-    },
-    id: null,
-  }));
-}
-
-function writeHttpError(res, status, errorCode, message) {
-  res.status(status).json(toErrorEnvelope(new ToolError({
-    errorCode,
-    message,
-    status,
-  })));
-}
-
-function createSharedSecretMiddleware(config) {
-  if (!config.sharedSecret) {
-    return (_req, _res, next) => next();
-  }
-
-  return (req, res, next) => {
-    const providedSecret = req.get(config.sharedSecretHeader);
-    if (!providedSecret || !providedSecret.trim()) {
-      writeHttpError(res, 401, 'missing_shared_secret', 'Missing required MCP shared secret header.');
-      return;
-    }
-
-    if (providedSecret !== config.sharedSecret) {
-      writeHttpError(res, 403, 'invalid_shared_secret', 'Invalid MCP shared secret header.');
-      return;
-    }
-
-    next();
-  };
-}
-
-function createHttpApp({ runtime, config, fetchImpl, documentTextPipeline, ocrProvider }) {
-  const resolvedRuntime = runtime || createMcpRuntime({
+function createHttpApp({
+  runtime,
+  letterWriterRuntime,
+  config,
+  letterWriterConfig,
+  fetchImpl,
+  documentTextPipeline,
+  ocrProvider,
+  s3Client,
+  getSignedUrlImpl,
+}) {
+  const legalserverRuntime = runtime || createMcpRuntime({
     config,
     fetchImpl,
     documentTextPipeline,
     ocrProvider,
   });
+  const resolvedLetterWriterConfig = letterWriterConfig || { enabled: false };
+  const resolvedLetterWriterRuntime = resolvedLetterWriterConfig.enabled
+    ? (letterWriterRuntime || createLetterWriterRuntime({
+        config: resolvedLetterWriterConfig,
+        s3Client,
+        getSignedUrlImpl,
+      }))
+    : null;
+
   const app = createMcpExpressApp({
-    host: resolvedRuntime.config.httpHost,
-    allowedHosts: resolvedRuntime.config.allowedHosts || undefined,
+    host: legalserverRuntime.config.httpHost,
+    allowedHosts: legalserverRuntime.config.allowedHosts || undefined,
   });
-  const sharedSecretMiddleware = createSharedSecretMiddleware(resolvedRuntime.config);
+  const legalserverAuth = createSharedSecretMiddleware(legalserverRuntime.config);
 
   app.get('/healthz', (_req, res) => {
     res.status(200).json({
       ok: true,
-      service: 'legalserver-mcp',
+      service: 'legal-tools-mcp',
       version: SERVER_VERSION,
+      apps: {
+        legalserver: true,
+        letter_writer: Boolean(resolvedLetterWriterRuntime),
+      },
     });
   });
 
-  app.post('/mcp', sharedSecretMiddleware, async (req, res) => {
-    const server = createMcpServer({ runtime: resolvedRuntime });
-    const transport = new StreamableHTTPServerTransport({
-      sessionIdGenerator: undefined,
+  const createLegalServer = () => createMcpServer({ runtime: legalserverRuntime });
+  mountStatelessMcpRoute({
+    app,
+    path: '/legalserver/mcp',
+    createServer: createLegalServer,
+    middleware: legalserverAuth,
+  });
+
+  // Preserve the original endpoint during the LibreChat migration.
+  mountStatelessMcpRoute({
+    app,
+    path: '/mcp',
+    createServer: createLegalServer,
+    middleware: legalserverAuth,
+  });
+
+  if (resolvedLetterWriterRuntime) {
+    mountStatelessMcpRoute({
+      app,
+      path: '/letter-writer/mcp',
+      createServer: () => createLetterWriterMcpServer({ runtime: resolvedLetterWriterRuntime }),
+      middleware: createSharedSecretMiddleware(resolvedLetterWriterRuntime.config),
     });
-
-    const cleanup = () => {
-      transport.close().catch(() => {});
-      server.close().catch(() => {});
-    };
-
-    res.once('close', cleanup);
-
-    try {
-      await server.connect(transport);
-      await transport.handleRequest(req, res, req.body);
-    } catch (error) {
-      cleanup();
-      if (!res.headersSent) {
-        res.status(500).json({
-          jsonrpc: '2.0',
-          error: {
-            code: -32603,
-            message: error instanceof Error ? error.message : 'Internal server error',
-          },
-          id: null,
-        });
-      }
-    }
-  });
-
-  app.get('/mcp', (_req, res) => {
-    writeMethodNotAllowed(res);
-  });
-
-  app.delete('/mcp', (_req, res) => {
-    writeMethodNotAllowed(res);
-  });
+  }
 
   return {
     app,
-    runtime: resolvedRuntime,
+    runtime: legalserverRuntime,
+    legalserverRuntime,
+    letterWriterRuntime: resolvedLetterWriterRuntime,
   };
 }
 
 async function startHttpServer(options) {
-  const { app, runtime } = createHttpApp(options);
+  const appRuntime = createHttpApp(options);
+  const { app, legalserverRuntime } = appRuntime;
 
   const server = await new Promise((resolve, reject) => {
-    const listener = app.listen(runtime.config.httpPort, runtime.config.httpHost);
+    const listener = app.listen(
+      legalserverRuntime.config.httpPort,
+      legalserverRuntime.config.httpHost,
+    );
     listener.once('error', reject);
     listener.once('listening', () => {
       listener.removeListener('error', reject);
@@ -123,8 +101,7 @@ async function startHttpServer(options) {
   });
 
   return {
-    app,
-    runtime,
+    ...appRuntime,
     server,
   };
 }

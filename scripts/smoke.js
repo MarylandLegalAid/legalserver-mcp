@@ -1,7 +1,7 @@
 const assert = require('node:assert/strict');
 const { Client } = require('@modelcontextprotocol/sdk/client/index.js');
 const { StreamableHTTPClientTransport } = require('@modelcontextprotocol/sdk/client/streamableHttp.js');
-const { CANONICAL_TOOL_NAMES } = require('../src/constants');
+const { CANONICAL_TOOL_NAMES } = require('../src/apps/legalserver/constants');
 const { createHttpApp } = require('../src/httpServer');
 
 function startServer(app) {
@@ -38,7 +38,7 @@ async function main() {
   });
   const server = await startServer(app);
   const address = server.address();
-  const clientTransport = new StreamableHTTPClientTransport(new URL(`http://127.0.0.1:${address.port}/mcp`));
+  const clientTransport = new StreamableHTTPClientTransport(new URL(`http://127.0.0.1:${address.port}/legalserver/mcp`));
   const client = new Client({
     name: 'legalserver-mcp-smoke',
     version: '1.0.0',

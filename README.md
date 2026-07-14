@@ -1,6 +1,11 @@
-# LegalServer MCP Server
+# Legal Tools MCP Service
 
-`legalserver-mcp` is a read-only Model Context Protocol server for documented LegalServer v1 matter, document, and discovery endpoints. The current implementation uses a Streamable HTTP server and includes one request-scoped prototype tool for "my tasks" style workflows.
+`legal-tools-mcp` is one Streamable HTTP service containing two independently exposed MCP applications:
+
+- LegalServer: read-only matter, document, discovery, and current-user tools
+- LetterWriter: DOCX letter generation from organization letterhead templates with private S3 delivery
+
+The applications share deployment and HTTP infrastructure but retain separate MCP servers, tool registries, configuration, and authentication boundaries.
 
 Version: `3.0.0`
 
@@ -18,8 +23,17 @@ Version: `3.0.0`
   - `MCP_SHARED_SECRET_HEADER` (default `x-legalserver-mcp-secret`)
   - `LEGALSERVER_USER_EMAIL_HEADER` (default `x-legalserver-user-email`)
   - `LEGALSERVER_CURRENT_USER_EVENTS_REPORT_URL` (optional Reports API URL for current-user event tools)
+  - `LEGALSERVER_CURRENT_USER_TASKS_REPORT_URL` (optional Reports API URL for current-user task tools)
   - `MATTER_CURRENT_USER_CACHE_TTL_MS` (default `60000`, `0` disables current-user matter caching)
   - `MATTER_CURRENT_USER_FETCH_CONCURRENCY` (default `4`, max `8`)
+- Optional LetterWriter runtime:
+  - `LETTER_WRITER_ENABLED` (`true` or `false`; defaults to enabled when `AWS_BUCKET_NAME` is set)
+  - `AWS_BUCKET_NAME` (required when LetterWriter is enabled)
+  - `AWS_REGION` (default `us-east-1`)
+  - `S3_PREFIX` (default `mcp/letters`)
+  - `PRESIGN_EXPIRES_SECONDS` (default `3600`)
+  - `LETTER_WRITER_MCP_SHARED_SECRET` (falls back to `MCP_SHARED_SECRET`)
+  - `LETTER_WRITER_MCP_SHARED_SECRET_HEADER` (default `x-letter-writer-mcp-secret`)
 - Optional OCR:
   - `DOCUMENT_OCR_PROVIDER=vertex_gemini`
   - `DOCUMENT_OCR_MODEL` (default `gemini-2.5-flash`)
@@ -41,7 +55,13 @@ npm install
 npm start
 ```
 
-The server starts a Streamable HTTP endpoint at `http://<host>:<port>/mcp` and exposes an unauthenticated health endpoint at `http://<host>:<port>/healthz`.
+The service exposes:
+
+- `http://<host>:<port>/legalserver/mcp`
+- `http://<host>:<port>/letter-writer/mcp` when LetterWriter is enabled
+- `http://<host>:<port>/healthz`
+
+The original `/mcp` LegalServer endpoint remains as a compatibility alias during migration.
 
 Example environment:
 
@@ -56,6 +76,7 @@ MCP_SHARED_SECRET=replace-me
 MCP_SHARED_SECRET_HEADER=x-legalserver-mcp-secret
 LEGALSERVER_USER_EMAIL_HEADER=x-legalserver-user-email
 LEGALSERVER_CURRENT_USER_EVENTS_REPORT_URL=
+LEGALSERVER_CURRENT_USER_TASKS_REPORT_URL=
 MATTER_CURRENT_USER_CACHE_TTL_MS=60000
 MATTER_CURRENT_USER_FETCH_CONCURRENCY=4
 DOCUMENT_OCR_PROVIDER=none
@@ -63,6 +84,13 @@ DOCUMENT_OCR_MODEL=gemini-2.5-flash
 GOOGLE_CLOUD_PROJECT=
 GOOGLE_CLOUD_LOCATION=global
 GOOGLE_APPLICATION_CREDENTIALS=
+LETTER_WRITER_ENABLED=true
+AWS_REGION=us-east-1
+AWS_BUCKET_NAME=your-private-letter-bucket
+S3_PREFIX=mcp/letters
+PRESIGN_EXPIRES_SECONDS=3600
+LETTER_WRITER_MCP_SHARED_SECRET=replace-with-a-separate-secret
+LETTER_WRITER_MCP_SHARED_SECRET_HEADER=x-letter-writer-mcp-secret
 ```
 
 Use `LEGALSERVER_BEARER_TOKEN`, not `LEGALSERVER_API_TOKEN`.
@@ -121,10 +149,16 @@ Phase 3 global discovery tools:
 - `matter_list_current_user`
 - `matter_list_current_user_active`
 
+LetterWriter tools, advertised only by `/letter-writer/mcp`:
+
+- `create_letter`
+- `list_letterheads`
+
 All list/search tools default to `page=1` and `page_size=10`. `page_size` is capped at `25`.
 Exact-match convenience lookups return `404 not_found` when no exact match exists and `409 multiple_matches` when more than one exact match is found.
 Some LegalServer tenants reject the documented `/api/v1/events?date=...` filter. When that happens, `event_search` and `event_list_by_date` fall back to a bounded local date filter over descending event pages and emit warnings describing the scanned window.
 When `LEGALSERVER_CURRENT_USER_EVENTS_REPORT_URL` is set, `event_list_current_user_on_date` and `event_list_current_user_between_dates` use that LegalServer Reports API URL with `filter[person_email]` set from the forwarded current-user email header, then apply the requested date window locally. The URL should be tenant-specific and kept in `.env` because it contains a report API key.
+When `LEGALSERVER_CURRENT_USER_TASKS_REPORT_URL` is set, `task_list_current_user_on_date` and `task_list_current_user_between_dates` use that report with `filter[todo_users_email]` set from the forwarded email. Due Date, completion, and optional deadline filters are applied locally; only user scoping is sent to the Reports API. Report-backed ranges are limited only by the report's configured window. The legacy API fallback retains its seven-day cap and uses LegalServer's native `list_date` filter.
 
 ## Benchmarking
 
@@ -250,29 +284,22 @@ When LegalServer returns a broken document endpoint, phase 2.5 now surfaces clea
 `matter_search_document_text` now returns partial success when some documents cannot be searched. Unsupported, OCR-blocked, oversized, and broken-download documents are skipped and summarized in `warnings`.
 `event_search` and `event_list_by_date` prefer LegalServer's native `date` filter when the tenant supports it. If the API returns `invalid_search_keys=date`, the server retries without that key, scans descending event pages, filters by the event's local start/end date, and marks the response with warnings. When the scan hits its `20`-page safety cap, `truncated=true` and pagination counts reflect the scanned window only.
 
-## Docker Compose Deployment
+## Deployment
 
-For the production path, run the MCP as a private Docker Compose service on the same network as LibreChat instead of as a host process reached through `host.docker.internal`.
+The root package and Dockerfile deploy both MCP applications in one process. Render should use one web service and the health check path `/healthz`; the server accepts Render's injected `PORT` variable.
 
-For a full step-by-step walkthrough, see [`docs/librechat-docker-compose-deployment.md`](./docs/librechat-docker-compose-deployment.md).
+For the older private Docker Compose deployment model, see [`docs/librechat-docker-compose-deployment.md`](./docs/librechat-docker-compose-deployment.md).
 
 Example service block:
 
 ```yaml
 services:
-  legalserver-mcp:
-    build:
-      context: ./custom-tools/legalserver-v2
-    env_file:
-      - ./custom-tools/legalserver-v2/.env
+  legal-tools-mcp:
+    build: .
+    env_file: .env
     expose:
       - "3001"
     restart: unless-stopped
-
-  api:
-    depends_on:
-      legalserver-mcp:
-        condition: service_healthy
 ```
 
 Recommended MCP env file for that service:
@@ -291,23 +318,31 @@ MATTER_CURRENT_USER_CACHE_TTL_MS=60000
 MATTER_CURRENT_USER_FETCH_CONCURRENCY=4
 ```
 
-The MCP service should not publish a host port in the production Compose deployment.
+When using Compose, the MCP service should not publish a host port unless external access is intentional.
 
 ## LibreChat Streamable HTTP Example
 
 ```yaml
 mcpSettings:
   allowedDomains:
-    - "http://legalserver-mcp:3001"
+    - "http://legal-tools-mcp:3001"
 
 mcpServers:
   LegalServer:
     type: streamable-http
-    url: "http://legalserver-mcp:3001/mcp"
+    url: "http://legal-tools-mcp:3001/legalserver/mcp"
     headers:
       X-LegalServer-Mcp-Secret: "${LEGALSERVER_MCP_SHARED_SECRET}"
       X-LegalServer-User-Email: "{{LIBRECHAT_USER_EMAIL}}"
     description: "Read-only LegalServer matter, document, discovery, and current-user task tools"
+    chatMenu: true
+
+  LetterWriter:
+    type: streamable-http
+    url: "http://legal-tools-mcp:3001/letter-writer/mcp"
+    headers:
+      X-Letter-Writer-Mcp-Secret: "${LETTER_WRITER_MCP_SHARED_SECRET}"
+    description: "Create DOCX letters on organization letterhead"
     chatMenu: true
 ```
 
@@ -369,10 +404,11 @@ Then verify the endpoint and a scoped task call through LibreChat or any MCP cli
 
 ```bash
 curl -i http://127.0.0.1:3001/healthz
-curl -i http://127.0.0.1:3001/mcp
+curl -i http://127.0.0.1:3001/legalserver/mcp
+curl -i http://127.0.0.1:3001/letter-writer/mcp
 ```
 
-The `healthz` check should return `200`, and the `/mcp` check should return `405 Method Not Allowed`. For a real MCP call, use a Streamable HTTP MCP client and set both `X-LegalServer-Mcp-Secret` and `X-LegalServer-User-Email`.
+The `healthz` check should return `200`, and each enabled MCP endpoint should return `405 Method Not Allowed` for a plain GET. For a real MCP call, use a Streamable HTTP MCP client with the endpoint's configured secret header. LegalServer current-user calls also require `X-LegalServer-User-Email`.
 The manual script exercises the identifier-first download path, so it remains valid even when `download_url` metadata is absent or stale.
 
 Manual phase 3 validation against a real LegalServer environment:
