@@ -1,0 +1,11 @@
+.git
+.gitignore
+.env
+.env.*
+.codex
+docs
+examples
+librechat
+node_modules
+scripts
+test

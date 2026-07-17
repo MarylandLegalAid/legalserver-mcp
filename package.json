@@ -1,21 +1,32 @@
 {
   "name": "legalserver-mcp",
-  "version": "1.0.0",
+  "version": "3.0.0",
+  "description": "Streamable HTTP MCP service exposing read-only LegalServer matter, document, and discovery tools",
   "main": "index.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "start": "node index.js",
+    "test": "node --test",
+    "smoke": "node scripts/smoke.js",
+    "manual:phase2": "node scripts/manual-phase2.js",
+    "manual:phase3": "node scripts/manual-phase3.js",
+    "benchmark:discover": "node scripts/benchmark-discover.js",
+    "benchmark:tools": "node scripts/benchmark-tools.js"
   },
-  "keywords": [],
-  "author": "",
+  "keywords": [
+    "mcp",
+    "legalserver",
+    "librechat"
+  ],
   "license": "ISC",
-  "description": "",
+  "engines": {
+    "node": ">=20"
+  },
   "dependencies": {
+    "@google/genai": "^1.26.0",
     "@modelcontextprotocol/sdk": "^1.26.0",
-    "@thednp/dommatrix": "^2.0.12",
-    "canvas": "^3.2.0",
     "dotenv": "^17.2.3",
-    "express": "^5.1.0",
     "mammoth": "^1.11.0",
-    "pdf-parse": "^2.4.5"
+    "pdf-lib": "^1.17.1",
+    "pdf-parse": "^1.1.1"
   }
 }

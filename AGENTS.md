@@ -1,0 +1,48 @@
+# Repository Guidelines
+
+## Project Structure & Module Organization
+
+Application code lives in [`src/`](/home/john/repos/legalserver-mcp/src). The HTTP entrypoint is [`index.js`](/home/john/repos/legalserver-mcp/index.js), with routing in [`src/httpServer.js`](/home/john/repos/legalserver-mcp/src/httpServer.js). LegalServer code lives under [`src/apps/legalserver/`](/home/john/repos/legalserver-mcp/src/apps/legalserver), including its tools, helpers, benchmark harness, and document extraction pipeline. Transport and authentication helpers live under [`src/shared/`](/home/john/repos/legalserver-mcp/src/shared). Tests are split into [`test/unit/`](/home/john/repos/legalserver-mcp/test/unit), [`test/handlers/`](/home/john/repos/legalserver-mcp/test/handlers), [`test/integration/`](/home/john/repos/legalserver-mcp/test/integration), and [`test/regression/`](/home/john/repos/legalserver-mcp/test/regression). Operational docs and bundled LegalServer OpenAPI files live in [`docs/`](/home/john/repos/legalserver-mcp/docs).
+
+This repo is public and generic — it should stay usable by any LegalServer tenant. Org-specific customizations (a particular deployment's branding, document generation, internal report IDs, etc.) belong in that org's own private deployment repo, not here.
+
+## Build, Test, and Development Commands
+
+- `npm install`: install dependencies.
+- `npm start`: run the Streamable HTTP MCP server locally.
+- `npm test`: run the full Node test suite with `node --test`.
+- `npm run smoke`: run an HTTP smoke test against a live local server instance.
+- `npm run manual:phase2` and `npm run manual:phase3`: manual validation scripts for real LegalServer environments.
+- `docker build -t legalserver-mcp:test .`: verify the production container image builds.
+
+## Coding Style & Naming Conventions
+
+Use CommonJS on Node 20+. Follow the existing style: 2-space indentation, single quotes, semicolons, small focused modules, and explicit error messages. Tool modules use plural domain filenames such as `tasks.js` or `contacts.js`; shared utilities belong in `helpers` or `tools/shared`. Environment variable names stay uppercase and descriptive, for example `LEGALSERVER_BEARER_TOKEN` and `MCP_SHARED_SECRET`.
+
+## Testing Guidelines
+
+Add or update tests for any behavior change. Prefer the narrowest layer that proves the change: unit tests for parsing/helpers, handler tests for tool behavior, and integration tests for MCP or HTTP transport. Test files should end in `.test.js` and sit beside the relevant suite folder. Run `npm test` before committing; run `npm run smoke` for HTTP/runtime changes.
+
+## Commit & Pull Request Guidelines
+
+Recent history uses short imperative commit subjects, for example `Implement phase 3 global discovery tools` and `Harden HTTP deployment for production cutover`. Keep commits scoped to one concern. Pull requests should explain the user-facing change, note any config or deployment impact, list validation performed, and include updated docs when behavior or setup changes.
+
+## Security & Configuration Tips
+
+Do not commit live tokens or copied deployment `.env` files. Use `.env.example` as the template. For LibreChat deployments, keep the MCP private on the Compose network, prefer `MCP_SHARED_SECRET`, and document any new headers or required environment variables in [`README.md`](/home/john/repos/legalserver-mcp/README.md).
+
+## Current Project Notes
+
+The `v2` branch is a single Streamable HTTP MCP service. Current-user tools depend on the MCP client forwarding the signed-in user's email through `LEGALSERVER_USER_EMAIL_HEADER` (default `x-legalserver-user-email`). Treat this as request context for convenience scoping, not as a LegalServer access-control boundary.
+
+`event_search` and `event_list_by_date` are commented out of `createEventTools()` in `tools/events.js` (and removed from `CANONICAL_TOOL_NAMES` in `constants.js`) for the initial `v2` release. Benchmarked at median ~2.0s / ~21.9s respectively (worst case ~22.2s for `event_list_by_date`) with no LegalServer Reports API replacement built — too slow to expose to an agent. Unlike the current-user event/task/matter tools below, these aren't scoped to one user's email, so the same `filter[person_email]`/`filter[todo_users_email]` report pattern doesn't directly apply; a general-purpose events report (or a faster native LegalServer date filter) would need to exist first. Re-enable by uncommenting both blocks and restoring the two `CANONICAL_TOOL_NAMES` entries; the implementations and their tests were kept intact (one test skipped, not deleted — see `test/handlers/phase3-tools.test.js`).
+
+Current-user event tools can use a LegalServer Reports API export when `LEGALSERVER_CURRENT_USER_EVENTS_REPORT_URL` is set. Keep the full report URL in `.env`, not code, because report IDs/API keys differ by tenant and the URL contains a report API key. The configured report must support `filter[person_email]`; the tool passes the forwarded user email into that override and then filters returned rows locally by `time_start`/`time_end`. Report-backed event ranges are intentionally open-ended within whatever window the report itself returns. The legacy non-report event fallback remains bounded because it scans LegalServer event pages.
+
+Current-user task tools can use a LegalServer Reports API export when `LEGALSERVER_CURRENT_USER_TASKS_REPORT_URL` is set. Such a report needs to support `filter[todo_users_email]` — live validation against one tenant showed LegalServer rejects a copied completion-filter override even though the report itself allowed one when queried directly, so the MCP strips invalid completion parameters, passes only the forwarded email upstream, and applies Due Date, completion, and deadline filters locally instead. Whether this is tenant-specific or general LegalServer Reports API behavior is unconfirmed — worth re-checking against a second tenant. The legacy API fallback continues to use LegalServer's native `list_date` filter. Keep the report URL in `.env` because it contains a report API key.
+
+`matter_list_current_user`/`matter_list_current_user_active` can use a LegalServer Reports API export when `LEGALSERVER_CURRENT_USER_MATTERS_REPORT_URL` is set. The report needs to support `filter[person_email]` and, when queried with a real (non-empty) email, return one row per (matter, assignment) for that user — an empty/missing `filter[person_email]` value triggered a LegalServer-side `555` error on the tenant this was validated against, so the tool always sends a real forwarded email and never queries the report unscoped. All other filtering (`assignment_type`, `case_disposition`, `current_only`, `legal_problem_code`) happens locally against the returned rows — the report is queried once per request with only the email filter applied server-side. Because the report has no assignment UUID/confirmation/notes fields, report-backed `matching_assignments` entries are reduced to `{type, start_date, end_date}`, unlike the REST-scan fallback's fuller `mapAssignment` shape. Validated against the `mdlab-demo` tenant's report 2809: ~0.5s per request regardless of case count, vs. multi-second/multi-page `/api/v1/matters` scans without a report configured. Swap the report's `load`/`api_key` (and thus the whole `LEGALSERVER_CURRENT_USER_MATTERS_REPORT_URL` value) when cutting over from a demo tenant to a production tenant's equivalent report — no code changes needed, just the env var.
+
+For event follow-up work, `event_get` currently uses the v1 event detail endpoint and is the best downstream tool once a report row provides `unique_id`/event UUID. Live dev probing showed v1 event detail is much faster than v2 detail for the same event, while v2 detail adds a `documents` field but was slow. Event reminders endpoints exist in the schemas but returned `404` for the tested fixture. Event-linked task/document searches are plausible (`module=event` with event ID/UUID) but need representative events with linked tasks/documents before adding tools.
+
+`matter_get` returns `client_gender`, `client_address_home`, and `client_address_mailing` (via the `normalizeAddress` helper in `helpers/identifiers.js`), sourced from the LegalServer v1 `/api/v1/matters` fields of the same name (`client_address_home`/`client_address_mailing` are nested `{street, street_2, city, state, zip, county}` objects per `docs/CoreAPI.v1.yaml`). These support building a mailing address block and an honorific from a matter record — added for a document-generation use case that lives outside this repo.
