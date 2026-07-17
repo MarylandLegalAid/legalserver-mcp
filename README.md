@@ -24,12 +24,15 @@ Version: `3.0.0`
   - `LEGALSERVER_CURRENT_USER_MATTERS_REPORT_URL` (optional Reports API URL for `matter_list_current_user` / `matter_list_current_user_active`)
   - `MATTER_CURRENT_USER_CACHE_TTL_MS` (default `60000`, `0` disables current-user matter caching)
   - `MATTER_CURRENT_USER_FETCH_CONCURRENCY` (default `4`, max `8`)
-- Optional OCR:
+- Optional OCR — two providers, pick one:
   - `DOCUMENT_OCR_PROVIDER=vertex_gemini`
-  - `DOCUMENT_OCR_MODEL` (default `gemini-2.5-flash`)
-  - `GOOGLE_CLOUD_PROJECT` required when OCR is enabled
-  - `GOOGLE_CLOUD_LOCATION` (default `global`)
-  - ADC credentials via runtime identity, `gcloud auth application-default login`, or `GOOGLE_APPLICATION_CREDENTIALS`
+    - `DOCUMENT_OCR_MODEL` (default `gemini-2.5-flash`)
+    - `GOOGLE_CLOUD_PROJECT` required
+    - `GOOGLE_CLOUD_LOCATION` (default `global`)
+    - ADC credentials via runtime identity, `gcloud auth application-default login`, or `GOOGLE_APPLICATION_CREDENTIALS`
+  - `DOCUMENT_OCR_PROVIDER=openrouter`
+    - `DOCUMENT_OCR_MODEL` (default `google/gemini-2.5-flash`; any vision-capable OpenRouter model slug works)
+    - `OPENROUTER_API_KEY` required — no GCP project, billing account, or service account needed
 
 Digital-text TXT, DOCX, and many PDFs work without OCR. Scanned PDFs and supported images fail explicitly with `error_code: "ocr_unavailable"` until OCR is configured.
 
@@ -74,11 +77,14 @@ DOCUMENT_OCR_MODEL=gemini-2.5-flash
 GOOGLE_CLOUD_PROJECT=
 GOOGLE_CLOUD_LOCATION=global
 GOOGLE_APPLICATION_CREDENTIALS=
+OPENROUTER_API_KEY=
 ```
 
 Use `LEGALSERVER_BEARER_TOKEN`, not `LEGALSERVER_API_TOKEN`.
 
 When `DOCUMENT_OCR_PROVIDER=vertex_gemini`, set `GOOGLE_CLOUD_PROJECT` and ensure ADC is available either from the runtime environment, `gcloud auth application-default login`, or `GOOGLE_APPLICATION_CREDENTIALS`.
+
+When `DOCUMENT_OCR_PROVIDER=openrouter`, set `OPENROUTER_API_KEY`. Requests go to `https://openrouter.ai/api/v1/chat/completions` with the page image as a base64 `image_url` content part (the standard OpenAI-compatible vision request shape) — any vision-capable model slug works via `DOCUMENT_OCR_MODEL`, default `google/gemini-2.5-flash`.
 
 ## Tool Set
 

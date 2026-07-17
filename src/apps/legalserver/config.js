@@ -88,11 +88,15 @@ function parseHttpPort(rawPort) {
 function parseOcrProvider(rawProvider) {
   const provider = (rawProvider || 'none').trim().toLowerCase();
 
-  if (provider === 'none' || provider === 'vertex_gemini') {
+  if (provider === 'none' || provider === 'vertex_gemini' || provider === 'openrouter') {
     return provider;
   }
 
-  throw new Error('DOCUMENT_OCR_PROVIDER must be one of: none, vertex_gemini');
+  throw new Error('DOCUMENT_OCR_PROVIDER must be one of: none, vertex_gemini, openrouter');
+}
+
+function defaultOcrModel(provider) {
+  return provider === 'openrouter' ? 'google/gemini-2.5-flash' : 'gemini-2.5-flash';
 }
 
 function normalizeOptionalString(value) {
@@ -148,9 +152,14 @@ function loadConfig(env) {
 
   const documentOcrProvider = parseOcrProvider(env.DOCUMENT_OCR_PROVIDER);
   const googleCloudProject = normalizeOptionalString(env.GOOGLE_CLOUD_PROJECT);
+  const openRouterApiKey = normalizeOptionalString(env.OPENROUTER_API_KEY);
 
-  if (documentOcrProvider !== 'none' && !googleCloudProject) {
-    throw new Error('GOOGLE_CLOUD_PROJECT environment variable is required when DOCUMENT_OCR_PROVIDER is enabled');
+  if (documentOcrProvider === 'vertex_gemini' && !googleCloudProject) {
+    throw new Error('GOOGLE_CLOUD_PROJECT environment variable is required when DOCUMENT_OCR_PROVIDER=vertex_gemini');
+  }
+
+  if (documentOcrProvider === 'openrouter' && !openRouterApiKey) {
+    throw new Error('OPENROUTER_API_KEY environment variable is required when DOCUMENT_OCR_PROVIDER=openrouter');
   }
 
   return {
@@ -158,9 +167,10 @@ function loadConfig(env) {
     bearerToken,
     timeoutMs: parseTimeout(env.LEGALSERVER_TIMEOUT_MS),
     documentOcrProvider,
-    documentOcrModel: normalizeOptionalString(env.DOCUMENT_OCR_MODEL) || 'gemini-2.5-flash',
+    documentOcrModel: normalizeOptionalString(env.DOCUMENT_OCR_MODEL) || defaultOcrModel(documentOcrProvider),
     googleCloudProject,
     googleCloudLocation: normalizeOptionalString(env.GOOGLE_CLOUD_LOCATION) || 'global',
+    openRouterApiKey,
     httpHost: normalizeOptionalString(env.MCP_HTTP_HOST) || '127.0.0.1',
     httpPort: parseHttpPort(env.PORT || env.MCP_HTTP_PORT),
     allowedHosts: parseAllowedHosts(env.MCP_ALLOWED_HOSTS),

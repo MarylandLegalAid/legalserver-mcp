@@ -1,4 +1,5 @@
 const { ToolError } = require('../helpers');
+const { OPENROUTER_CHAT_COMPLETIONS_URL, OPENROUTER_OCR_TIMEOUT_MS } = require('../constants');
 
 const OCR_PROMPT = 'Transcribe this page exactly as plain text. Do not summarize, explain, label, or add commentary.';
 
@@ -91,6 +92,69 @@ class VertexGeminiOcrProvider {
   }
 }
 
+class OpenRouterOcrProvider {
+  constructor({ apiKey, model, fetchImpl, timeoutMs }) {
+    this.apiKey = apiKey;
+    this.model = model;
+    this.fetchImpl = fetchImpl || fetch;
+    this.timeoutMs = timeoutMs || OPENROUTER_OCR_TIMEOUT_MS;
+  }
+
+  async extractPages(pages) {
+    const results = [];
+
+    for (const page of pages) {
+      try {
+        const response = await this.fetchImpl(OPENROUTER_CHAT_COMPLETIONS_URL, {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${this.apiKey}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            model: this.model,
+            temperature: 0,
+            messages: [{
+              role: 'user',
+              content: [
+                { type: 'text', text: OCR_PROMPT },
+                {
+                  type: 'image_url',
+                  image_url: {
+                    url: `data:${page.mimeType};base64,${page.bytes.toString('base64')}`,
+                  },
+                },
+              ],
+            }],
+          }),
+          signal: AbortSignal.timeout(this.timeoutMs),
+        });
+
+        if (!response.ok) {
+          const errorBody = await response.text();
+          throw new Error(`OpenRouter returned ${response.status}: ${errorBody.slice(0, 300)}`);
+        }
+
+        const json = await response.json();
+        const text = json?.choices?.[0]?.message?.content;
+
+        results.push({
+          pageNumber: page.pageNumber,
+          text: String(text || ''),
+        });
+      } catch (error) {
+        throw new ToolError({
+          errorCode: 'extraction_failed',
+          message: `OCR failed on page ${page.pageNumber}: ${error instanceof Error ? error.message : String(error)}`,
+          status: 502,
+        });
+      }
+    }
+
+    return results;
+  }
+}
+
 function createOcrProvider(config) {
   if (!config || !config.documentOcrProvider || config.documentOcrProvider === 'none') {
     return null;
@@ -104,10 +168,18 @@ function createOcrProvider(config) {
     });
   }
 
+  if (config.documentOcrProvider === 'openrouter') {
+    return new OpenRouterOcrProvider({
+      apiKey: config.openRouterApiKey,
+      model: config.documentOcrModel,
+    });
+  }
+
   throw new Error(`Unsupported OCR provider: ${config.documentOcrProvider}`);
 }
 
 module.exports = {
+  OpenRouterOcrProvider,
   VertexGeminiOcrProvider,
   createOcrProvider,
   extractResponseText,

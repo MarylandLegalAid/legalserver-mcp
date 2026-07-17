@@ -110,6 +110,7 @@ DOCUMENT_OCR_MODEL=gemini-2.5-flash
 GOOGLE_CLOUD_PROJECT=
 GOOGLE_CLOUD_LOCATION=global
 GOOGLE_APPLICATION_CREDENTIALS=
+OPENROUTER_API_KEY=
 ```
 
 Important notes:
@@ -120,7 +121,7 @@ Important notes:
 - `LEGALSERVER_USER_EMAIL_HEADER` is the header name the MCP will inspect for the current user email.
 - `MCP_HTTP_HOST=0.0.0.0` is correct inside the container.
 
-If you want OCR for scanned PDFs or images, configure the OCR variables now. If you do not need OCR yet, leave `DOCUMENT_OCR_PROVIDER=none`.
+If you want OCR for scanned PDFs or images, configure the OCR variables now. If you do not need OCR yet, leave `DOCUMENT_OCR_PROVIDER=none`. Two providers are supported: `vertex_gemini` (GCP project + service account, via `GOOGLE_CLOUD_PROJECT`/`GOOGLE_APPLICATION_CREDENTIALS`) or `openrouter` (just `OPENROUTER_API_KEY`, no GCP setup needed — see `README.md`).
 
 ## Step 3: Add The MCP Service To Docker Compose
 

@@ -128,3 +128,36 @@ test('OCR config defaults and validates provider-specific requirements', () => {
   );
   assert.throws(() => parseOcrProvider('bad'), /DOCUMENT_OCR_PROVIDER/);
 });
+
+test('OpenRouter OCR provider defaults its model and requires an API key', () => {
+  assert.equal(parseOcrProvider('openrouter'), 'openrouter');
+
+  assert.throws(
+    () => loadConfig({
+      LEGALSERVER_BASE_URL: 'https://example.legalserver.org/',
+      LEGALSERVER_BEARER_TOKEN: 'token',
+      DOCUMENT_OCR_PROVIDER: 'openrouter',
+    }),
+    /OPENROUTER_API_KEY/,
+  );
+
+  const config = loadConfig({
+    LEGALSERVER_BASE_URL: 'https://example.legalserver.org/',
+    LEGALSERVER_BEARER_TOKEN: 'token',
+    DOCUMENT_OCR_PROVIDER: 'openrouter',
+    OPENROUTER_API_KEY: 'sk-or-test-key',
+  });
+
+  assert.equal(config.documentOcrProvider, 'openrouter');
+  assert.equal(config.documentOcrModel, 'google/gemini-2.5-flash');
+  assert.equal(config.openRouterApiKey, 'sk-or-test-key');
+
+  const withCustomModel = loadConfig({
+    LEGALSERVER_BASE_URL: 'https://example.legalserver.org/',
+    LEGALSERVER_BEARER_TOKEN: 'token',
+    DOCUMENT_OCR_PROVIDER: 'openrouter',
+    OPENROUTER_API_KEY: 'sk-or-test-key',
+    DOCUMENT_OCR_MODEL: 'google/gemini-2.5-flash-lite',
+  });
+  assert.equal(withCustomModel.documentOcrModel, 'google/gemini-2.5-flash-lite');
+});
