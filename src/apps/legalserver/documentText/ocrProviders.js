@@ -1,7 +1,50 @@
 const { ToolError } = require('../helpers');
-const { OPENROUTER_CHAT_COMPLETIONS_URL, OPENROUTER_OCR_TIMEOUT_MS } = require('../constants');
+const {
+  CHAT_VISION_OCR_TIMEOUT_MS,
+  OPENAI_CHAT_COMPLETIONS_URL,
+  OPENROUTER_CHAT_COMPLETIONS_URL,
+} = require('../constants');
 
 const OCR_PROMPT = 'Transcribe this page exactly as plain text. Do not summarize, explain, label, or add commentary.';
+
+// Shared by OpenRouterOcrProvider and OpenAiOcrProvider — both speak the same
+// OpenAI-compatible chat completions vision format. `url` is always passed
+// explicitly by the caller (never defaulted) so which vendor's servers receive
+// the page image is always an unambiguous, visible choice at the call site.
+async function callVisionChatCompletionsApi({ url, apiKey, model, page, fetchImpl, timeoutMs }) {
+  const response = await fetchImpl(url, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      model,
+      temperature: 0,
+      messages: [{
+        role: 'user',
+        content: [
+          { type: 'text', text: OCR_PROMPT },
+          {
+            type: 'image_url',
+            image_url: {
+              url: `data:${page.mimeType};base64,${page.bytes.toString('base64')}`,
+            },
+          },
+        ],
+      }],
+    }),
+    signal: AbortSignal.timeout(timeoutMs),
+  });
+
+  if (!response.ok) {
+    const errorBody = await response.text();
+    throw new Error(`${new URL(url).hostname} returned ${response.status}: ${errorBody.slice(0, 300)}`);
+  }
+
+  const json = await response.json();
+  return String(json?.choices?.[0]?.message?.content || '');
+}
 
 function extractResponseText(response) {
   if (!response) {
@@ -97,7 +140,7 @@ class OpenRouterOcrProvider {
     this.apiKey = apiKey;
     this.model = model;
     this.fetchImpl = fetchImpl || fetch;
-    this.timeoutMs = timeoutMs || OPENROUTER_OCR_TIMEOUT_MS;
+    this.timeoutMs = timeoutMs || CHAT_VISION_OCR_TIMEOUT_MS;
   }
 
   async extractPages(pages) {
@@ -105,43 +148,55 @@ class OpenRouterOcrProvider {
 
     for (const page of pages) {
       try {
-        const response = await this.fetchImpl(OPENROUTER_CHAT_COMPLETIONS_URL, {
-          method: 'POST',
-          headers: {
-            Authorization: `Bearer ${this.apiKey}`,
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({
-            model: this.model,
-            temperature: 0,
-            messages: [{
-              role: 'user',
-              content: [
-                { type: 'text', text: OCR_PROMPT },
-                {
-                  type: 'image_url',
-                  image_url: {
-                    url: `data:${page.mimeType};base64,${page.bytes.toString('base64')}`,
-                  },
-                },
-              ],
-            }],
-          }),
-          signal: AbortSignal.timeout(this.timeoutMs),
+        const text = await callVisionChatCompletionsApi({
+          url: OPENROUTER_CHAT_COMPLETIONS_URL,
+          apiKey: this.apiKey,
+          model: this.model,
+          page,
+          fetchImpl: this.fetchImpl,
+          timeoutMs: this.timeoutMs,
         });
 
-        if (!response.ok) {
-          const errorBody = await response.text();
-          throw new Error(`OpenRouter returned ${response.status}: ${errorBody.slice(0, 300)}`);
-        }
-
-        const json = await response.json();
-        const text = json?.choices?.[0]?.message?.content;
-
-        results.push({
-          pageNumber: page.pageNumber,
-          text: String(text || ''),
+        results.push({ pageNumber: page.pageNumber, text });
+      } catch (error) {
+        throw new ToolError({
+          errorCode: 'extraction_failed',
+          message: `OCR failed on page ${page.pageNumber}: ${error instanceof Error ? error.message : String(error)}`,
+          status: 502,
         });
+      }
+    }
+
+    return results;
+  }
+}
+
+// Routes page images directly to OpenAI's own API (api.openai.com) — deliberately
+// NOT via OpenRouter or any other proxy, so orgs with a ZDR/BAA agreement scoped to
+// OpenAI specifically can rely on that agreement covering this traffic.
+class OpenAiOcrProvider {
+  constructor({ apiKey, model, fetchImpl, timeoutMs }) {
+    this.apiKey = apiKey;
+    this.model = model;
+    this.fetchImpl = fetchImpl || fetch;
+    this.timeoutMs = timeoutMs || CHAT_VISION_OCR_TIMEOUT_MS;
+  }
+
+  async extractPages(pages) {
+    const results = [];
+
+    for (const page of pages) {
+      try {
+        const text = await callVisionChatCompletionsApi({
+          url: OPENAI_CHAT_COMPLETIONS_URL,
+          apiKey: this.apiKey,
+          model: this.model,
+          page,
+          fetchImpl: this.fetchImpl,
+          timeoutMs: this.timeoutMs,
+        });
+
+        results.push({ pageNumber: page.pageNumber, text });
       } catch (error) {
         throw new ToolError({
           errorCode: 'extraction_failed',
@@ -175,10 +230,18 @@ function createOcrProvider(config) {
     });
   }
 
+  if (config.documentOcrProvider === 'openai') {
+    return new OpenAiOcrProvider({
+      apiKey: config.openAiApiKey,
+      model: config.documentOcrModel,
+    });
+  }
+
   throw new Error(`Unsupported OCR provider: ${config.documentOcrProvider}`);
 }
 
 module.exports = {
+  OpenAiOcrProvider,
   OpenRouterOcrProvider,
   VertexGeminiOcrProvider,
   createOcrProvider,

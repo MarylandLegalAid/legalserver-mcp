@@ -24,7 +24,7 @@ Version: `3.0.0`
   - `LEGALSERVER_CURRENT_USER_MATTERS_REPORT_URL` (optional Reports API URL for `matter_list_current_user` / `matter_list_current_user_active`)
   - `MATTER_CURRENT_USER_CACHE_TTL_MS` (default `60000`, `0` disables current-user matter caching)
   - `MATTER_CURRENT_USER_FETCH_CONCURRENCY` (default `4`, max `8`)
-- Optional OCR — two providers, pick one:
+- Optional OCR — three providers, pick one:
   - `DOCUMENT_OCR_PROVIDER=vertex_gemini`
     - `DOCUMENT_OCR_MODEL` (default `gemini-2.5-flash`)
     - `GOOGLE_CLOUD_PROJECT` required
@@ -33,6 +33,12 @@ Version: `3.0.0`
   - `DOCUMENT_OCR_PROVIDER=openrouter`
     - `DOCUMENT_OCR_MODEL` (default `google/gemini-2.5-flash`; any vision-capable OpenRouter model slug works)
     - `OPENROUTER_API_KEY` required — no GCP project, billing account, or service account needed
+    - page images are proxied through OpenRouter to whichever underlying model you pick
+  - `DOCUMENT_OCR_PROVIDER=openai`
+    - `DOCUMENT_OCR_MODEL` (default `gpt-5.6-luna`; any vision-capable OpenAI model slug works)
+    - `OPENAI_API_KEY` required
+    - calls `api.openai.com` directly, never proxied — use this one if page images need to go
+      straight to OpenAI specifically (e.g. an existing ZDR/BAA agreement scoped to OpenAI)
 
 Digital-text TXT, DOCX, and many PDFs work without OCR. Scanned PDFs and supported images fail explicitly with `error_code: "ocr_unavailable"` until OCR is configured.
 
@@ -78,6 +84,7 @@ GOOGLE_CLOUD_PROJECT=
 GOOGLE_CLOUD_LOCATION=global
 GOOGLE_APPLICATION_CREDENTIALS=
 OPENROUTER_API_KEY=
+OPENAI_API_KEY=
 ```
 
 Use `LEGALSERVER_BEARER_TOKEN`, not `LEGALSERVER_API_TOKEN`.
@@ -85,6 +92,8 @@ Use `LEGALSERVER_BEARER_TOKEN`, not `LEGALSERVER_API_TOKEN`.
 When `DOCUMENT_OCR_PROVIDER=vertex_gemini`, set `GOOGLE_CLOUD_PROJECT` and ensure ADC is available either from the runtime environment, `gcloud auth application-default login`, or `GOOGLE_APPLICATION_CREDENTIALS`.
 
 When `DOCUMENT_OCR_PROVIDER=openrouter`, set `OPENROUTER_API_KEY`. Requests go to `https://openrouter.ai/api/v1/chat/completions` with the page image as a base64 `image_url` content part (the standard OpenAI-compatible vision request shape) — any vision-capable model slug works via `DOCUMENT_OCR_MODEL`, default `google/gemini-2.5-flash`.
+
+When `DOCUMENT_OCR_PROVIDER=openai`, set `OPENAI_API_KEY`. Requests go directly to `https://api.openai.com/v1/chat/completions` — the same request shape as the `openrouter` provider, but never proxied through a third party, which matters if your org's data-handling agreement with OpenAI (e.g. zero data retention, a BAA) is scoped to OpenAI specifically. Default model is `gpt-5.6-luna`; any vision-capable OpenAI model slug works via `DOCUMENT_OCR_MODEL`.
 
 ## Tool Set
 

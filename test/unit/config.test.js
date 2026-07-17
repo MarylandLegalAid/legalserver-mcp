@@ -161,3 +161,36 @@ test('OpenRouter OCR provider defaults its model and requires an API key', () =>
   });
   assert.equal(withCustomModel.documentOcrModel, 'google/gemini-2.5-flash-lite');
 });
+
+test('OpenAI OCR provider defaults its model and requires an API key', () => {
+  assert.equal(parseOcrProvider('openai'), 'openai');
+
+  assert.throws(
+    () => loadConfig({
+      LEGALSERVER_BASE_URL: 'https://example.legalserver.org/',
+      LEGALSERVER_BEARER_TOKEN: 'token',
+      DOCUMENT_OCR_PROVIDER: 'openai',
+    }),
+    /OPENAI_API_KEY/,
+  );
+
+  const config = loadConfig({
+    LEGALSERVER_BASE_URL: 'https://example.legalserver.org/',
+    LEGALSERVER_BEARER_TOKEN: 'token',
+    DOCUMENT_OCR_PROVIDER: 'openai',
+    OPENAI_API_KEY: 'sk-test-key',
+  });
+
+  assert.equal(config.documentOcrProvider, 'openai');
+  assert.equal(config.documentOcrModel, 'gpt-5.6-luna');
+  assert.equal(config.openAiApiKey, 'sk-test-key');
+
+  const withCustomModel = loadConfig({
+    LEGALSERVER_BASE_URL: 'https://example.legalserver.org/',
+    LEGALSERVER_BEARER_TOKEN: 'token',
+    DOCUMENT_OCR_PROVIDER: 'openai',
+    OPENAI_API_KEY: 'sk-test-key',
+    DOCUMENT_OCR_MODEL: 'gpt-4o',
+  });
+  assert.equal(withCustomModel.documentOcrModel, 'gpt-4o');
+});
