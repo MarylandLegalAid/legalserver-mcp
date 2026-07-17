@@ -175,6 +175,10 @@ function loadConfig(env) {
       env.LEGALSERVER_CURRENT_USER_TASKS_REPORT_URL,
       'LEGALSERVER_CURRENT_USER_TASKS_REPORT_URL',
     ),
+    currentUserMattersReportUrl: normalizeOptionalUrl(
+      env.LEGALSERVER_CURRENT_USER_MATTERS_REPORT_URL,
+      'LEGALSERVER_CURRENT_USER_MATTERS_REPORT_URL',
+    ),
     matterCurrentUserCacheTtlMs: parseMatterCurrentUserCacheTtl(env.MATTER_CURRENT_USER_CACHE_TTL_MS),
     matterCurrentUserFetchConcurrency: parseMatterCurrentUserFetchConcurrency(env.MATTER_CURRENT_USER_FETCH_CONCURRENCY),
   };

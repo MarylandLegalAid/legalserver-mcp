@@ -615,35 +615,39 @@ async function runEventSearchWithOptionalDateFallback({
 
 function createEventTools() {
   return [
-    {
-      name: 'event_search',
-      description: 'Search LegalServer events by documented global filters.',
-      inputSchema: {
-        type: 'object',
-        properties: {
-          ...pageProperties(),
-          title: { type: 'string', description: 'Event title filter.' },
-          location: { type: 'string', description: 'Event location filter.' },
-          court: { type: 'string', description: 'Court filter.' },
-          date: isoDateProperty('Event date in YYYY-MM-DD format.'),
-          matter: { type: 'string', description: 'Matter filter mapped to the matters query parameter.' },
-          external_id: { type: 'string', description: 'External event ID filter.' },
-        },
-        additionalProperties: false,
-      },
-      budgetPolicy: {
-        page_size_default: DEFAULT_PAGE_SIZE,
-        page_size_max: MAX_PAGE_SIZE,
-      },
-      handler: ({ args, client, helpers }) => runEventSearchWithOptionalDateFallback({
-        args,
-        client,
-        helpers,
-        mapper: mapEventSummary,
-        queryBuilder: buildEventQuery,
-        fallbackQueryBuilder: buildEventQueryWithoutDate,
-      }),
-    },
+    // Disabled for this release: no report-backed alternative exists, and the tenant
+    // date-filter fallback scans event pages, measured at ~2.0s median / ~2.1s max
+    // (docs/tool-latency.md, `event_search` scenario). Re-enable once a report or a
+    // faster server-side filter is available. Implementation kept intact below.
+    // {
+    //   name: 'event_search',
+    //   description: 'Search LegalServer events by documented global filters.',
+    //   inputSchema: {
+    //     type: 'object',
+    //     properties: {
+    //       ...pageProperties(),
+    //       title: { type: 'string', description: 'Event title filter.' },
+    //       location: { type: 'string', description: 'Event location filter.' },
+    //       court: { type: 'string', description: 'Court filter.' },
+    //       date: isoDateProperty('Event date in YYYY-MM-DD format.'),
+    //       matter: { type: 'string', description: 'Matter filter mapped to the matters query parameter.' },
+    //       external_id: { type: 'string', description: 'External event ID filter.' },
+    //     },
+    //     additionalProperties: false,
+    //   },
+    //   budgetPolicy: {
+    //     page_size_default: DEFAULT_PAGE_SIZE,
+    //     page_size_max: MAX_PAGE_SIZE,
+    //   },
+    //   handler: ({ args, client, helpers }) => runEventSearchWithOptionalDateFallback({
+    //     args,
+    //     client,
+    //     helpers,
+    //     mapper: mapEventSummary,
+    //     queryBuilder: buildEventQuery,
+    //     fallbackQueryBuilder: buildEventQueryWithoutDate,
+    //   }),
+    // },
     {
       name: 'event_get',
       description: 'Return one LegalServer event by event UUID.',
@@ -673,31 +677,36 @@ function createEventTools() {
         });
       },
     },
-    {
-      name: 'event_list_by_date',
-      description: 'List LegalServer events for one specific date.',
-      inputSchema: {
-        type: 'object',
-        properties: {
-          date: isoDateProperty('Event date in YYYY-MM-DD format.'),
-          ...pageProperties(),
-        },
-        required: ['date'],
-        additionalProperties: false,
-      },
-      budgetPolicy: {
-        page_size_default: DEFAULT_PAGE_SIZE,
-        page_size_max: MAX_PAGE_SIZE,
-      },
-      handler: ({ args, client, helpers }) => runEventSearchWithOptionalDateFallback({
-        args,
-        client,
-        helpers,
-        mapper: mapEventSummary,
-        queryBuilder: (toolArgs) => ({ date: toolArgs.date }),
-        fallbackQueryBuilder: () => ({}),
-      }),
-    },
+    // Disabled for this release: no report-backed alternative exists, and the tenant
+    // date-filter fallback scans up to 20 event pages, measured at ~21.9s median /
+    // ~22.2s max (docs/tool-latency.md, `event_list_by_date` scenario) — far too
+    // slow to be useful. Re-enable once a report or a faster server-side filter is
+    // available. Implementation kept intact below.
+    // {
+    //   name: 'event_list_by_date',
+    //   description: 'List LegalServer events for one specific date.',
+    //   inputSchema: {
+    //     type: 'object',
+    //     properties: {
+    //       date: isoDateProperty('Event date in YYYY-MM-DD format.'),
+    //       ...pageProperties(),
+    //     },
+    //     required: ['date'],
+    //     additionalProperties: false,
+    //   },
+    //   budgetPolicy: {
+    //     page_size_default: DEFAULT_PAGE_SIZE,
+    //     page_size_max: MAX_PAGE_SIZE,
+    //   },
+    //   handler: ({ args, client, helpers }) => runEventSearchWithOptionalDateFallback({
+    //     args,
+    //     client,
+    //     helpers,
+    //     mapper: mapEventSummary,
+    //     queryBuilder: (toolArgs) => ({ date: toolArgs.date }),
+    //     fallbackQueryBuilder: () => ({}),
+    //   }),
+    // },
     {
       name: 'event_list_current_user_on_date',
       description: 'List calendar events for the current request user on one date.',

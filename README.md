@@ -21,6 +21,7 @@ Version: `3.0.0`
   - `LEGALSERVER_USER_EMAIL_HEADER` (default `x-legalserver-user-email`)
   - `LEGALSERVER_CURRENT_USER_EVENTS_REPORT_URL` (optional Reports API URL for current-user event tools)
   - `LEGALSERVER_CURRENT_USER_TASKS_REPORT_URL` (optional Reports API URL for current-user task tools)
+  - `LEGALSERVER_CURRENT_USER_MATTERS_REPORT_URL` (optional Reports API URL for `matter_list_current_user` / `matter_list_current_user_active`)
   - `MATTER_CURRENT_USER_CACHE_TTL_MS` (default `60000`, `0` disables current-user matter caching)
   - `MATTER_CURRENT_USER_FETCH_CONCURRENCY` (default `4`, max `8`)
 - Optional OCR:
@@ -65,6 +66,7 @@ MCP_SHARED_SECRET_HEADER=x-legalserver-mcp-secret
 LEGALSERVER_USER_EMAIL_HEADER=x-legalserver-user-email
 LEGALSERVER_CURRENT_USER_EVENTS_REPORT_URL=
 LEGALSERVER_CURRENT_USER_TASKS_REPORT_URL=
+LEGALSERVER_CURRENT_USER_MATTERS_REPORT_URL=
 MATTER_CURRENT_USER_CACHE_TTL_MS=60000
 MATTER_CURRENT_USER_FETCH_CONCURRENCY=4
 DOCUMENT_OCR_PROVIDER=none
@@ -111,9 +113,7 @@ Phase 3 global discovery tools:
 - `task_list_on_date`
 - `task_list_current_user_on_date`
 - `task_list_current_user_between_dates`
-- `event_search`
 - `event_get`
-- `event_list_by_date`
 - `event_list_current_user_on_date`
 - `event_list_current_user_between_dates`
 - `contact_search`
@@ -130,11 +130,19 @@ Phase 3 global discovery tools:
 - `matter_list_current_user`
 - `matter_list_current_user_active`
 
+**Disabled for this release**: `event_search` and `event_list_by_date`. Both fall back to a
+tenant date-filter workaround that scans event pages when the documented `/api/v1/events?date=...`
+filter is rejected, and both were measured too slow to be useful (median ~2.0s and ~21.9s, worst
+case ~22.2s — see `docs/tool-latency.md`). No LegalServer Reports API replacement exists for
+either yet. The implementations are commented out (not deleted) in
+`src/apps/legalserver/tools/events.js`; re-enable there once a report-backed alternative exists
+(remove them from `CANONICAL_TOOL_NAMES` in `constants.js` too, or the tool-count tests will fail).
+
 All list/search tools default to `page=1` and `page_size=10`. `page_size` is capped at `25`.
 Exact-match convenience lookups return `404 not_found` when no exact match exists and `409 multiple_matches` when more than one exact match is found.
-Some LegalServer tenants reject the documented `/api/v1/events?date=...` filter. When that happens, `event_search` and `event_list_by_date` fall back to a bounded local date filter over descending event pages and emit warnings describing the scanned window.
 When `LEGALSERVER_CURRENT_USER_EVENTS_REPORT_URL` is set, `event_list_current_user_on_date` and `event_list_current_user_between_dates` use that LegalServer Reports API URL with `filter[person_email]` set from the forwarded current-user email header, then apply the requested date window locally. The URL should be tenant-specific and kept in `.env` because it contains a report API key.
 When `LEGALSERVER_CURRENT_USER_TASKS_REPORT_URL` is set, `task_list_current_user_on_date` and `task_list_current_user_between_dates` use that report with `filter[todo_users_email]` set from the forwarded email. Due Date, completion, and optional deadline filters are applied locally; only user scoping is sent to the Reports API. Report-backed ranges are limited only by the report's configured window. The legacy API fallback retains its seven-day cap and uses LegalServer's native `list_date` filter.
+When `LEGALSERVER_CURRENT_USER_MATTERS_REPORT_URL` is set, `matter_list_current_user` and `matter_list_current_user_active` use that report with `filter[person_email]` set from the forwarded email; only user scoping is sent to the Reports API, and `assignment_type`/`case_disposition`/`current_only`/`legal_problem_code` are all applied locally against the returned rows. The report is expected to return one row per (matter, assignment) pair for the user, so `matching_assignments` is built by grouping rows on `unique_id`; because the report doesn't carry assignment IDs, confirmation status, or notes, report-backed `matching_assignments` entries only include `type`/`start_date`/`end_date` (use `matter_get`/`matter_list_assignments` for full assignment detail on a specific matter). Without this report configured, both tools fall back to the paginated `/api/v1/matters` scan (see Benchmarking below for why that fallback can be slow).
 
 ## Benchmarking
 
@@ -258,7 +266,7 @@ When LegalServer returns a broken document endpoint, phase 2.5 now surfaces clea
   - `document_id ASC`
 
 `matter_search_document_text` now returns partial success when some documents cannot be searched. Unsupported, OCR-blocked, oversized, and broken-download documents are skipped and summarized in `warnings`.
-`event_search` and `event_list_by_date` prefer LegalServer's native `date` filter when the tenant supports it. If the API returns `invalid_search_keys=date`, the server retries without that key, scans descending event pages, filters by the event's local start/end date, and marks the response with warnings. When the scan hits its `20`-page safety cap, `truncated=true` and pagination counts reflect the scanned window only.
+`event_search` and `event_list_by_date` (both disabled for this release — see above) prefer LegalServer's native `date` filter when the tenant supports it. If the API returns `invalid_search_keys=date`, the server retries without that key, scans descending event pages, filters by the event's local start/end date, and marks the response with warnings. When the scan hits its `20`-page safety cap, `truncated=true` and pagination counts reflect the scanned window only.
 
 ## Deployment
 

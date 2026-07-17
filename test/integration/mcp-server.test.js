@@ -397,11 +397,7 @@ test('in-process MCP server lists canonical tools and serves representative call
   }));
   assert.equal(tasks.data[0].task_uuid, 'task-uuid-1');
 
-  const events = parseToolResult(await client.callTool({
-    name: 'event_search',
-    arguments: { date: '2026-03-12' },
-  }));
-  assert.equal(events.data[0].event_uuid, 'event-uuid-1');
+  // event_search is disabled for this release (see tools/events.js) — skipped here.
 
   const contacts = parseToolResult(await client.callTool({
     name: 'contact_search',

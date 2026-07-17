@@ -750,29 +750,23 @@ test('task_get returns phase 3 detail fields', async () => {
   assert.equal(payload.data.module.uuid, 'matter-uuid-1');
 });
 
-test('event_search maps matter to the matters query parameter and event_get expands nested refs', async () => {
-  const { registry, calls } = createRegistry([
-    jsonResponse(200, makePaginated([sampleEvent])),
+test('event_get expands nested refs', async () => {
+  // event_search coverage (matter -> matters query param mapping, attendee_count,
+  // matter_count) was removed here since that tool is disabled for this release
+  // (see tools/events.js); re-add alongside it if it's re-enabled.
+  const { registry } = createRegistry([
     jsonResponse(200, { data: sampleEvent }),
   ]);
-
-  const search = await registry.execute('event_search', {
-    date: '2026-03-12',
-    matter: 'matter-uuid-1',
-  });
-  assert.equal(search.data[0].attendee_count, 1);
-  assert.equal(search.data[0].matter_count, 1);
 
   const detail = await registry.execute('event_get', { event_uuid: 'event-uuid-1' });
   assert.equal(detail.data.attendees[0].user_uuid, 'user-uuid-7');
   assert.equal(detail.data.matters[0].case_uuid, 'matter-uuid-1');
   assert.equal(detail.data.outreaches[0].outreach_uuid, 'outreach-uuid-1');
-
-  const searchUrl = new URL(calls[0].url);
-  assert.equal(searchUrl.searchParams.get('matters'), 'matter-uuid-1');
 });
 
-test('event_list_by_date falls back to a bounded local date filter when LegalServer rejects the documented date key', async () => {
+// event_list_by_date is disabled for this release (see tools/events.js) — its
+// date-fallback scan coverage is skipped, not removed, so it's easy to re-enable.
+test('event_list_by_date falls back to a bounded local date filter when LegalServer rejects the documented date key', { skip: 'event_list_by_date is disabled for this release; see tools/events.js' }, async () => {
   const fallbackEvent = {
     ...sampleEvent,
     id: 203,
@@ -1096,6 +1090,8 @@ test('matter_list_current_user filters matters by current user assignment and fo
 
   assert.deepEqual(payload.data.map((item) => item.case_uuid), ['matter-uuid-current']);
   assert.equal(payload.data[0].matching_assignments[0].assignment_uuid, 'assignment-uuid-1');
+  assert.equal(payload.data[0].office, 'Main Office');
+  assert.equal(payload.data[0].program, 'Housing');
 
   const matterUrl = new URL(calls[1].url);
   assert.equal(matterUrl.searchParams.get('results'), 'full');
@@ -1372,6 +1368,184 @@ test('matter_list_current_user_active falls back to per-disposition scans when a
       'Incomplete Intake',
       'Prescreen',
     ],
+  );
+});
+
+const sampleMatterReportRows = [
+  {
+    id: '901',
+    unique_id: 'matter-uuid-report-1',
+    identification_number: '26-0101',
+    email: 'report-jordan@example.org',
+    full_name: 'Report Client One',
+    office_name: 'Baltimore City',
+    program_name: 'General',
+    matter_builtin_lookup_case_disposition_case_disposition_expn: 'Open',
+    matter_builtin_lookup_case_status_case_status_expn: 'Open',
+    matter_builtin_lookup_problem_code_legal_problem_code_expn: '01 Housing',
+    assignment_builtin_lookup_assignment_types_assignment_type_expn: 'Intake',
+    date_open: '2025-01-01T00:00:00-00:00',
+    close_date: null,
+    reject_date: null,
+    date_start: '2025-01-01T00:00:00-00:00',
+    date_end: '2025-01-02T00:00:00-00:00',
+  },
+  {
+    id: '901',
+    unique_id: 'matter-uuid-report-1',
+    identification_number: '26-0101',
+    email: 'report-jordan@example.org',
+    full_name: 'Report Client One',
+    office_name: 'Baltimore City',
+    program_name: 'General',
+    matter_builtin_lookup_case_disposition_case_disposition_expn: 'Open',
+    matter_builtin_lookup_case_status_case_status_expn: 'Open',
+    matter_builtin_lookup_problem_code_legal_problem_code_expn: '01 Housing',
+    assignment_builtin_lookup_assignment_types_assignment_type_expn: 'Primary Advocate',
+    date_open: '2025-01-01T00:00:00-00:00',
+    close_date: null,
+    reject_date: null,
+    date_start: '2025-01-02T00:00:00-00:00',
+    date_end: null,
+  },
+  {
+    id: '902',
+    unique_id: 'matter-uuid-report-2',
+    identification_number: '26-0102',
+    email: 'report-jordan@example.org',
+    full_name: 'Report Client Two',
+    office_name: 'Allegany / Garrett',
+    program_name: 'General',
+    matter_builtin_lookup_case_disposition_case_disposition_expn: 'Closed',
+    matter_builtin_lookup_case_status_case_status_expn: 'Closed',
+    matter_builtin_lookup_problem_code_legal_problem_code_expn: '69 Other Housing',
+    assignment_builtin_lookup_assignment_types_assignment_type_expn: 'Case Manager',
+    date_open: '2024-01-01T00:00:00-00:00',
+    close_date: '2025-06-01T00:00:00-00:00',
+    reject_date: null,
+    date_start: '2024-01-01T00:00:00-00:00',
+    date_end: null,
+  },
+];
+
+test('matter_list_current_user uses the configured report, grouping rows by matter and reducing matching_assignments', async () => {
+  const { registry, calls } = createRegistry(
+    [jsonResponse(200, { data: sampleMatterReportRows })],
+    {
+      config: {
+        currentUserMattersReportUrl: 'https://example.legalserver.org/modules/report/api_export.php?load=2809&api_key=matter-report-key&filter%5Bperson_email%5D=',
+      },
+    },
+  );
+
+  const payload = await registry.execute(
+    'matter_list_current_user',
+    {},
+    {
+      requestInfo: {
+        headers: { 'x-legalserver-user-email': 'REPORT-JORDAN@EXAMPLE.ORG' },
+      },
+    },
+  );
+
+  assert.equal(calls.length, 1);
+  const reportUrl = new URL(calls[0].url);
+  assert.equal(reportUrl.searchParams.get('load'), '2809');
+  assert.equal(reportUrl.searchParams.get('filter[person_email]'), 'REPORT-JORDAN@EXAMPLE.ORG');
+
+  assert.deepEqual(payload.data.map((item) => item.case_uuid), [
+    'matter-uuid-report-1',
+    'matter-uuid-report-2',
+  ]);
+
+  const [matterOne, matterTwo] = payload.data;
+  assert.equal(matterOne.case_number, '26-0101');
+  assert.equal(matterOne.client_name, 'Report Client One');
+  assert.equal(matterOne.office, 'Baltimore City');
+  assert.equal(matterOne.program, 'General');
+  assert.equal(matterOne.case_profile_url, 'https://example.legalserver.org/matter/dynamic-profile/view/901');
+  assert.equal(matterOne.date_opened, '2025-01-01');
+  // current_only defaults to true, so the past Intake row (end_date in 2025) is excluded.
+  assert.deepEqual(matterOne.matching_assignments, [
+    { type: 'Primary Advocate', start_date: '2025-01-02', end_date: null },
+  ]);
+
+  assert.equal(matterTwo.case_number, '26-0102');
+  assert.equal(matterTwo.office, 'Allegany / Garrett');
+  assert.deepEqual(matterTwo.matching_assignments, [
+    { type: 'Case Manager', start_date: '2024-01-01', end_date: null },
+  ]);
+});
+
+test('matter_list_current_user report path applies assignment_type and current_only filters locally', async () => {
+  const { registry, calls } = createRegistry(
+    [jsonResponse(200, { data: sampleMatterReportRows })],
+    {
+      config: {
+        currentUserMattersReportUrl: 'https://example.legalserver.org/modules/report/api_export.php?load=2809&api_key=matter-report-key&filter%5Bperson_email%5D=',
+      },
+    },
+  );
+
+  const payload = await registry.execute(
+    'matter_list_current_user',
+    { current_only: false },
+    {
+      requestInfo: {
+        headers: { 'x-legalserver-user-email': 'report-jordan-2@example.org' },
+      },
+    },
+  );
+
+  assert.equal(calls.length, 1);
+  const matterOne = payload.data.find((item) => item.case_uuid === 'matter-uuid-report-1');
+  assert.deepEqual(matterOne.matching_assignments, [
+    { type: 'Intake', start_date: '2025-01-01', end_date: '2025-01-02' },
+    { type: 'Primary Advocate', start_date: '2025-01-02', end_date: null },
+  ]);
+});
+
+test('matter_list_current_user_active report path filters case_disposition locally with a single report request', async () => {
+  const { registry, calls } = createRegistry(
+    [jsonResponse(200, { data: sampleMatterReportRows })],
+    {
+      config: {
+        currentUserMattersReportUrl: 'https://example.legalserver.org/modules/report/api_export.php?load=2809&api_key=matter-report-key&filter%5Bperson_email%5D=',
+      },
+    },
+  );
+
+  const payload = await registry.execute(
+    'matter_list_current_user_active',
+    {},
+    {
+      requestInfo: {
+        headers: { 'x-legalserver-user-email': 'report-jordan-3@example.org' },
+      },
+    },
+  );
+
+  assert.equal(calls.length, 1);
+  assert.deepEqual(payload.data.map((item) => item.case_uuid), ['matter-uuid-report-1']);
+});
+
+test('matter_list_current_user report path requires the current-user email header', async () => {
+  const { registry } = createRegistry(
+    [],
+    {
+      config: {
+        currentUserMattersReportUrl: 'https://example.legalserver.org/modules/report/api_export.php?load=2809&api_key=matter-report-key&filter%5Bperson_email%5D=',
+      },
+    },
+  );
+
+  await assert.rejects(
+    () => registry.execute('matter_list_current_user', {}, { requestInfo: { headers: {} } }),
+    (error) => {
+      assert.equal(error.errorCode, 'missing_user_context');
+      assert.equal(error.status, 400);
+      return true;
+    },
   );
 });
 

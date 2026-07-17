@@ -72,9 +72,9 @@ const CANONICAL_TOOL_NAMES = [
   'task_list_on_date',
   'task_list_current_user_on_date',
   'task_list_current_user_between_dates',
-  'event_search',
+  // 'event_search' and 'event_list_by_date' are disabled for this release — see the
+  // matching comment blocks in tools/events.js and docs/tool-latency.md.
   'event_get',
-  'event_list_by_date',
   'event_list_current_user_on_date',
   'event_list_current_user_between_dates',
   'contact_search',

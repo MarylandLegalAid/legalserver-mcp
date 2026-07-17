@@ -6,6 +6,18 @@ Raw results: `.bench/results/2026-03-15T20-28-56-164Z.json`
 
 This document is sanitized for commit safety. Benchmark fixtures and raw request traces remain in `.bench/` and must not be committed.
 
+## Release Status (manually maintained — reconcile on regeneration)
+
+`event_search` and `event_list_by_date` are commented out of the tool registry for the `v2`
+release based on the numbers below (median ~2.0s / ~21.9s, worst case ~22.2s) — no report-backed
+alternative exists for either. `matter_list_current_user` and `matter_list_current_user_active`
+also show as strong report candidates below (worst case ~11.9s/~21.5s) but were fixed this
+release with a report-backed path (`LEGALSERVER_CURRENT_USER_MATTERS_REPORT_URL`); see
+`AGENTS.md`. `event_list_current_user_on_date`/`_between_dates` and
+`task_list_current_user_on_date`/`_between_dates` also have report-backed paths already
+(`LEGALSERVER_CURRENT_USER_EVENTS_REPORT_URL` / `LEGALSERVER_CURRENT_USER_TASKS_REPORT_URL`) —
+their slow numbers below reflect the unconfigured REST-scan fallback, not the report path.
+
 ## Summary
 - Strong report candidates:
 - `event_list_by_date` (events on date)

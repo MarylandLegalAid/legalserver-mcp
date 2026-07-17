@@ -240,6 +240,8 @@ function mapLitigation(record, helpers) {
 }
 
 function mapCurrentUserMatterSummary(record, matchingAssignments, helpers) {
+  const firstAssignment = matchingAssignments[0] ?? null;
+
   return {
     case_uuid: helpers.getFirstDefined(record.matter_uuid, record.case_uuid, record.uuid),
     case_id: record.case_id ?? null,
@@ -250,6 +252,8 @@ function mapCurrentUserMatterSummary(record, matchingAssignments, helpers) {
     case_disposition: record.case_disposition ?? null,
     legal_problem_code: record.legal_problem_code ?? null,
     case_profile_url: record.case_profile_url ?? null,
+    office: firstAssignment ? helpers.normalizeOffice(firstAssignment.office) : null,
+    program: firstAssignment ? (firstAssignment.program ?? null) : null,
     date_opened: helpers.normalizeDateValue(record.date_opened),
     date_closed: helpers.normalizeDateValue(record.date_closed),
     matching_assignments: matchingAssignments.map((assignment) => mapAssignment(assignment, helpers)),
@@ -542,6 +546,155 @@ function buildCurrentUserMatterCacheKey({ email, filters, variant }) {
   });
 }
 
+function readCurrentUserEmail({ config, helpers, requestInfo }) {
+  const headerName = config?.userEmailHeader || 'x-legalserver-user-email';
+  const email = readHeaderValue(requestInfo?.headers, headerName);
+
+  if (!email) {
+    throw new helpers.ToolError({
+      errorCode: 'missing_user_context',
+      message: `This tool requires the ${headerName} request header.`,
+      status: 400,
+    });
+  }
+
+  return email;
+}
+
+function extractReportDateOnly(value) {
+  const match = String(value ?? '').match(/^(\d{4}-\d{2}-\d{2})/);
+  return match ? match[1] : (value ?? null);
+}
+
+function isCurrentReportAssignmentRow(row, helpers) {
+  return isCurrentAssignment({
+    start_date: extractReportDateOnly(row.date_start),
+    end_date: extractReportDateOnly(row.date_end),
+  }, helpers);
+}
+
+function groupCurrentUserMatterReportRows(rows) {
+  const grouped = new Map();
+
+  for (const row of rows) {
+    const uuid = row.unique_id;
+    if (!uuid) {
+      continue;
+    }
+
+    if (!grouped.has(uuid)) {
+      grouped.set(uuid, { matter: row, assignmentRows: [] });
+    }
+
+    grouped.get(uuid).assignmentRows.push(row);
+  }
+
+  return grouped;
+}
+
+function mapCurrentUserMatterReportAssignment(row) {
+  return {
+    type: row.assignment_builtin_lookup_assignment_types_assignment_type_expn ?? null,
+    start_date: extractReportDateOnly(row.date_start),
+    end_date: extractReportDateOnly(row.date_end),
+  };
+}
+
+function mapCurrentUserMatterReportSummary(matterRow, assignmentRows, baseUrl, helpers) {
+  const id = matterRow.id ?? null;
+
+  return {
+    case_uuid: matterRow.unique_id ?? null,
+    case_id: id,
+    case_number: matterRow.identification_number ?? null,
+    // Not present in the Reports API export; the REST-backed path can populate this from
+    // case_title, but no equivalent field exists on this report.
+    case_title: null,
+    client_name: matterRow.full_name ?? null,
+    case_status: matterRow.matter_builtin_lookup_case_status_case_status_expn ?? null,
+    case_disposition: matterRow.matter_builtin_lookup_case_disposition_case_disposition_expn ?? null,
+    legal_problem_code: matterRow.matter_builtin_lookup_problem_code_legal_problem_code_expn ?? null,
+    case_profile_url: id !== null && id !== undefined
+      ? new URL(`matter/dynamic-profile/view/${id}`, baseUrl).toString()
+      : null,
+    office: helpers.normalizeOffice(matterRow.office_name),
+    program: matterRow.program_name ?? null,
+    date_opened: extractReportDateOnly(matterRow.date_open),
+    date_closed: extractReportDateOnly(matterRow.close_date),
+    matching_assignments: assignmentRows.map((row) => mapCurrentUserMatterReportAssignment(row)),
+  };
+}
+
+function reportValueMatchesFilter(value, filter) {
+  return String(value ?? '').trim().toLowerCase() === String(filter).trim().toLowerCase();
+}
+
+async function scanCurrentUserMattersFromReport({ client, config, filters, helpers, requestInfo, variant }) {
+  const email = readCurrentUserEmail({ config, helpers, requestInfo });
+  const response = await client.getReportJson(config.currentUserMattersReportUrl, {
+    query: {
+      'filter[person_email]': email,
+    },
+  });
+
+  const rows = Array.isArray(response.data) ? response.data : [];
+  const grouped = groupCurrentUserMatterReportRows(rows);
+  const allowedDispositions = variant === 'active'
+    ? new Set(ACTIVE_CURRENT_USER_MATTER_DISPOSITIONS.map((disposition) => disposition.toLowerCase()))
+    : (filters.case_disposition
+      ? new Set(
+          String(filters.case_disposition)
+            .split(',')
+            .map((disposition) => disposition.trim().toLowerCase())
+            .filter(Boolean),
+        )
+      : null);
+
+  const matches = [];
+
+  for (const group of grouped.values()) {
+    if (allowedDispositions) {
+      const disposition = String(
+        group.matter.matter_builtin_lookup_case_disposition_case_disposition_expn ?? '',
+      ).toLowerCase();
+      if (!allowedDispositions.has(disposition)) {
+        continue;
+      }
+    }
+
+    if (filters.legal_problem_code && !reportValueMatchesFilter(
+      group.matter.matter_builtin_lookup_problem_code_legal_problem_code_expn,
+      filters.legal_problem_code,
+    )) {
+      continue;
+    }
+
+    let assignmentRows = group.assignmentRows;
+
+    if (filters.assignment_type) {
+      assignmentRows = assignmentRows.filter((row) => reportValueMatchesFilter(
+        row.assignment_builtin_lookup_assignment_types_assignment_type_expn,
+        filters.assignment_type,
+      ));
+    }
+
+    if (filters.current_only) {
+      assignmentRows = assignmentRows.filter((row) => isCurrentReportAssignmentRow(row, helpers));
+    }
+
+    if (assignmentRows.length === 0) {
+      continue;
+    }
+
+    matches.push(mapCurrentUserMatterReportSummary(group.matter, assignmentRows, client.baseUrl, helpers));
+  }
+
+  return {
+    matches: matches.sort(compareActiveCurrentUserMatters),
+    scannedAllPages: true,
+  };
+}
+
 async function runCurrentUserMatterScan({ args, client, config, helpers, requestInfo, variant }) {
   const headerName = config?.userEmailHeader || 'x-legalserver-user-email';
   const email = readHeaderValue(requestInfo?.headers, headerName);
@@ -555,6 +708,17 @@ async function runCurrentUserMatterScan({ args, client, config, helpers, request
     : null;
 
   const executeScan = async () => {
+    if (config?.currentUserMattersReportUrl) {
+      return scanCurrentUserMattersFromReport({
+        client,
+        config,
+        filters,
+        helpers,
+        requestInfo,
+        variant,
+      });
+    }
+
     const currentUser = await resolveCurrentUser({
       client,
       config,
