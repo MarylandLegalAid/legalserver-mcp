@@ -1,7 +1,7 @@
 {
-  "name": "legal-tools-mcp",
+  "name": "legalserver-mcp",
   "version": "3.0.0",
-  "description": "Streamable HTTP MCP service for LegalServer discovery and letter generation",
+  "description": "Streamable HTTP MCP service exposing read-only LegalServer matter, document, and discovery tools",
   "main": "index.js",
   "scripts": {
     "start": "node index.js",
@@ -15,7 +15,6 @@
   "keywords": [
     "mcp",
     "legalserver",
-    "letter-writer",
     "librechat"
   ],
   "license": "ISC",
@@ -23,15 +22,11 @@
     "node": ">=20"
   },
   "dependencies": {
-    "@aws-sdk/client-s3": "^3.1087.0",
-    "@aws-sdk/s3-request-presigner": "^3.1087.0",
     "@google/genai": "^1.26.0",
     "@modelcontextprotocol/sdk": "^1.26.0",
-    "docxtemplater": "^3.69.0",
     "dotenv": "^17.2.3",
     "mammoth": "^1.11.0",
     "pdf-lib": "^1.17.1",
-    "pdf-parse": "^1.1.1",
-    "pizzip": "^3.2.0"
+    "pdf-parse": "^1.1.1"
   }
 }

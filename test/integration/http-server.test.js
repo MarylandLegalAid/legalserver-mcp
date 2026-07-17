@@ -100,11 +100,10 @@ test('HTTP server exposes an unauthenticated health endpoint', async () => {
     assert.equal(response.status, 200);
     assert.deepEqual(payload, {
       ok: true,
-      service: 'legal-tools-mcp',
+      service: 'legalserver-mcp',
       version: SERVER_VERSION,
       apps: {
         legalserver: true,
-        letter_writer: false,
       },
     });
   } finally {

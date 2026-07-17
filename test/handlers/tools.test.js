@@ -42,6 +42,22 @@ const sampleMatter = {
   case_title: 'Test Matter',
   client_full_name: 'Jane Client',
   client_email_address: 'jane@example.org',
+  client_gender: 'Female',
+  client_address_home: {
+    street: '667 Broadway',
+    street_2: null,
+    city: 'New York',
+    state: 'NY',
+    zip: '10001',
+    county: 'Alameda',
+  },
+  client_address_mailing: {
+    street: null,
+    street_2: null,
+    city: null,
+    state: null,
+    zip: null,
+  },
   case_status: 'Open',
   case_disposition: 'Open',
   legal_problem_code: '01 Housing',
@@ -83,6 +99,16 @@ const successCases = [
       const result = parseSuccess(payload);
       assert.equal(result.data.case_uuid, 'matter-uuid-1');
       assert.equal(result.data.client_name, 'Jane Client');
+      assert.equal(result.data.client_gender, 'Female');
+      assert.deepEqual(result.data.client_address_home, {
+        street_address: '667 Broadway',
+        street_address_2: null,
+        city: 'New York',
+        state: 'NY',
+        zip_code: '10001',
+        county: 'Alameda',
+      });
+      assert.equal(result.data.client_address_mailing, null);
     },
   },
   {

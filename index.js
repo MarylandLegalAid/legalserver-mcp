@@ -1,27 +1,21 @@
 #!/usr/bin/env node
 
 require('dotenv').config({
-  path: ['.env', '.env.letter-writer'],
+  path: '.env',
   quiet: true,
 });
 
 const { loadConfig } = require('./src/apps/legalserver/config');
-const { loadLetterWriterConfig } = require('./src/apps/letterWriter/config');
 const { startHttpServer } = require('./src/httpServer');
 
 async function main() {
   const config = loadConfig(process.env);
-  const letterWriterConfig = loadLetterWriterConfig(process.env);
   const { server } = await startHttpServer({
     config,
-    letterWriterConfig,
     fetchImpl: global.fetch,
   });
-  console.error(`legal-tools-mcp listening on http://${config.httpHost}:${config.httpPort}`);
+  console.error(`legalserver-mcp listening on http://${config.httpHost}:${config.httpPort}`);
   console.error('LegalServer MCP endpoint: /legalserver/mcp');
-  if (letterWriterConfig.enabled) {
-    console.error('LetterWriter MCP endpoint: /letter-writer/mcp');
-  }
 
   let shuttingDown = false;
 
@@ -31,7 +25,7 @@ async function main() {
     }
 
     shuttingDown = true;
-    console.error(`legal-tools-mcp received ${signal}, shutting down`);
+    console.error(`legalserver-mcp received ${signal}, shutting down`);
     await new Promise((resolve) => server.close(resolve));
   };
 

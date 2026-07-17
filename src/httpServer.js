@@ -1,22 +1,14 @@
 const { createMcpExpressApp } = require('@modelcontextprotocol/sdk/server/express.js');
 const { SERVER_VERSION } = require('./apps/legalserver/constants');
 const { createMcpRuntime, createMcpServer } = require('./apps/legalserver/mcpServer');
-const {
-  createLetterWriterMcpServer,
-  createLetterWriterRuntime,
-} = require('./apps/letterWriter/mcpServer');
 const { createSharedSecretMiddleware, mountStatelessMcpRoute } = require('./shared/http');
 
 function createHttpApp({
   runtime,
-  letterWriterRuntime,
   config,
-  letterWriterConfig,
   fetchImpl,
   documentTextPipeline,
   ocrProvider,
-  s3Client,
-  getSignedUrlImpl,
 }) {
   const legalserverRuntime = runtime || createMcpRuntime({
     config,
@@ -24,14 +16,6 @@ function createHttpApp({
     documentTextPipeline,
     ocrProvider,
   });
-  const resolvedLetterWriterConfig = letterWriterConfig || { enabled: false };
-  const resolvedLetterWriterRuntime = resolvedLetterWriterConfig.enabled
-    ? (letterWriterRuntime || createLetterWriterRuntime({
-        config: resolvedLetterWriterConfig,
-        s3Client,
-        getSignedUrlImpl,
-      }))
-    : null;
 
   const app = createMcpExpressApp({
     host: legalserverRuntime.config.httpHost,
@@ -42,11 +26,10 @@ function createHttpApp({
   app.get('/healthz', (_req, res) => {
     res.status(200).json({
       ok: true,
-      service: 'legal-tools-mcp',
+      service: 'legalserver-mcp',
       version: SERVER_VERSION,
       apps: {
         legalserver: true,
-        letter_writer: Boolean(resolvedLetterWriterRuntime),
       },
     });
   });
@@ -67,20 +50,10 @@ function createHttpApp({
     middleware: legalserverAuth,
   });
 
-  if (resolvedLetterWriterRuntime) {
-    mountStatelessMcpRoute({
-      app,
-      path: '/letter-writer/mcp',
-      createServer: () => createLetterWriterMcpServer({ runtime: resolvedLetterWriterRuntime }),
-      middleware: createSharedSecretMiddleware(resolvedLetterWriterRuntime.config),
-    });
-  }
-
   return {
     app,
     runtime: legalserverRuntime,
     legalserverRuntime,
-    letterWriterRuntime: resolvedLetterWriterRuntime,
   };
 }
 

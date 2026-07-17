@@ -4,3 +4,8 @@
 node_modules/
 .codex
 .bench/
+old version info/
+
+# Tenant-specific LegalServer exports (this repo is public/generic; these are
+# real custom-field/config exports from a specific org's tenant).
+docs/Custom Fields*.csv

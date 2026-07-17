@@ -1,6 +1,6 @@
 # Deploying LegalServer MCP Alongside LibreChat With Docker Compose
 
-This guide covers the legacy private Docker Compose deployment path. The repository now hosts LegalServer and LetterWriter in one process; this guide configures the LegalServer endpoint only.
+This guide covers the legacy private Docker Compose deployment path.
 
 It is written for the current deployment model:
 
@@ -524,4 +524,4 @@ Before you consider the HTTP deployment complete:
 
 - LibreChat MCP Servers docs: https://www.librechat.ai/docs/configuration/librechat_yaml/object_structure/mcp_servers
 - LibreChat MCP Settings docs: https://www.librechat.ai/docs/configuration/librechat_yaml/object_structure/mcp_settings
-- Bundled LegalServer API spec: [docs/LegalServerAPI.v1.yaml](/home/john/repos/legalserver-mcp/docs/LegalServerAPI.v1.yaml)
+- Bundled LegalServer API spec: [docs/CoreAPI.v1.yaml](/home/john/repos/legalserver-mcp/docs/CoreAPI.v1.yaml)

@@ -96,6 +96,32 @@ function normalizeCounty(value) {
   return getFirstDefined(value.county_name, value.county, value.name);
 }
 
+function normalizeAddress(value) {
+  if (!value || typeof value !== 'object') {
+    return null;
+  }
+
+  const streetAddress = getFirstDefined(value.street, value.street_address);
+  const streetAddress2 = getFirstDefined(value.street_2, value.street_address_2);
+  const city = getFirstDefined(value.city);
+  const state = getFirstDefined(value.state);
+  const zipCode = getFirstDefined(value.zip, value.zip_code);
+  const county = normalizeCounty(value.county);
+
+  if (!streetAddress && !streetAddress2 && !city && !state && !zipCode && !county) {
+    return null;
+  }
+
+  return {
+    street_address: streetAddress,
+    street_address_2: streetAddress2,
+    city,
+    state,
+    zip_code: zipCode,
+    county,
+  };
+}
+
 function joinNameParts(parts) {
   return parts
     .filter((part) => part !== undefined && part !== null && String(part).trim() !== '')
@@ -188,6 +214,7 @@ module.exports = {
   compareIsoDates,
   getFirstDefined,
   listInclusiveIsoDates,
+  normalizeAddress,
   normalizeArrayValue,
   normalizeCounty,
   normalizeDateValue,
