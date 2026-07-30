@@ -65,6 +65,13 @@ jobs:
           fi
           echo "Tag and package.json agree on $pkg."
 
+      # A container repository name MUST be lowercase, and this GitHub
+      # organization is spelled "MarylandLegalAid". Interpolating the owner or
+      # repository straight into the tag therefore fails — and it fails at the
+      # very last step, after the tests and the build have already run.
+      - name: Work out the image name
+        run: echo "IMAGE=ghcr.io/${GITHUB_REPOSITORY,,}" >> "$GITHUB_ENV"
+
       - uses: docker/setup-buildx-action@v3
 
       - uses: docker/login-action@v3
@@ -82,7 +89,7 @@ jobs:
           # is a one-line change if you want to run it on an ARM Mac, at the cost
           # of a slower emulated build.
           platforms: linux/amd64
-          tags: ghcr.io/${{ github.repository_owner }}/legalserver-mcp:${{ github.ref_name }}
+          tags: ${{ env.IMAGE }}:${{ github.ref_name }}
           # image.source is what links the GHCR package to this repository in the
           # GitHub UI. Without it the package appears orphaned and nobody can
           # find the source from the registry listing.
