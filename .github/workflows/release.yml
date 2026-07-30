@@ -1,0 +1,99 @@
+# =============================================================================
+# Publish a container image to GHCR when a version tag is pushed.
+# =============================================================================
+# This server is consumed as a pinned image tag, not as source. The LibreChat
+# deployment that uses it (github.com/MarylandLegalAid/librechat-azure) names an
+# exact version in its compose.yaml:
+#
+#     image: ghcr.io/marylandlegalaid/legalserver-mcp:v3.0.0
+#
+# So a release is: bump the version in package.json, push a matching `v` tag,
+# and let this workflow build it.
+#
+#     git tag v3.1.0 && git push origin v3.1.0
+#
+# The image tag is the git tag VERBATIM, `v` prefix included, because that is
+# what the deployment pins. Nothing here publishes `latest` — deliberately. The
+# deployment this feeds was previously pinned to a `:latest` tag and silently
+# drifted onto a pre-release, which is the reason it now pins versions at all.
+# Not publishing a moving tag means nobody can make that mistake by accident.
+# =============================================================================
+
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'          # matches the Dockerfile's base image
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      # Gate the publish on the tests. An image is immutable once pushed and the
+      # deployment pins it by tag, so a broken build is not something a later
+      # commit quietly fixes — it needs a new version and a new tag.
+      - name: Test
+        run: npm test
+
+      # The image version and package.json must agree. They are edited in
+      # separate steps by a human, so they WILL disagree eventually, and the
+      # result is an image whose reported version is a lie — which is
+      # specifically painful when someone is trying to work out which version a
+      # running container actually is.
+      - name: Check the tag matches package.json
+        run: |
+          set -euo pipefail
+          tag="${GITHUB_REF_NAME#v}"
+          pkg="$(node -p "require('./package.json').version")"
+          if [ "$tag" != "$pkg" ]; then
+            echo "::error::tag $GITHUB_REF_NAME implies version $tag but package.json says $pkg"
+            exit 1
+          fi
+          echo "Tag and package.json agree on $pkg."
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          # linux/amd64 only: this runs on an Azure VM. Adding linux/arm64 here
+          # is a one-line change if you want to run it on an ARM Mac, at the cost
+          # of a slower emulated build.
+          platforms: linux/amd64
+          tags: ghcr.io/${{ github.repository_owner }}/legalserver-mcp:${{ github.ref_name }}
+          # image.source is what links the GHCR package to this repository in the
+          # GitHub UI. Without it the package appears orphaned and nobody can
+          # find the source from the registry listing.
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.version=${{ github.ref_name }}
+            org.opencontainers.image.revision=${{ github.sha }}
+          # Keeps the manifest a single plain image. With provenance on, the tag
+          # resolves to a manifest list carrying an extra unknown/unknown entry,
+          # which is confusing to anyone inspecting it by hand and buys nothing
+          # here — the image is built from a public repo by a public workflow.
+          provenance: false
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
