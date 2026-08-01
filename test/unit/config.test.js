@@ -107,7 +107,7 @@ test('HTTP config parses optional host filtering and shared secret settings', ()
   assert.equal(config.matterCurrentUserFetchConcurrency, 6);
 });
 
-test('OCR config defaults and validates provider-specific requirements', () => {
+test('OCR config defaults to none, the only supported value in this release', () => {
   const config = loadConfig({
     LEGALSERVER_BASE_URL: 'https://example.legalserver.org/',
     LEGALSERVER_BEARER_TOKEN: 'token',
@@ -116,81 +116,34 @@ test('OCR config defaults and validates provider-specific requirements', () => {
   assert.equal(config.documentOcrProvider, 'none');
   assert.equal(config.documentOcrModel, 'gemini-2.5-flash');
   assert.equal(config.googleCloudLocation, 'global');
-  assert.equal(parseOcrProvider('vertex_gemini'), 'vertex_gemini');
 
-  assert.throws(
-    () => loadConfig({
-      LEGALSERVER_BASE_URL: 'https://example.legalserver.org/',
-      LEGALSERVER_BEARER_TOKEN: 'token',
-      DOCUMENT_OCR_PROVIDER: 'vertex_gemini',
-    }),
-    /GOOGLE_CLOUD_PROJECT/,
-  );
+  assert.equal(parseOcrProvider('none'), 'none');
+  assert.equal(parseOcrProvider(undefined), 'none');
+  assert.equal(parseOcrProvider('  NONE  '), 'none');
   assert.throws(() => parseOcrProvider('bad'), /DOCUMENT_OCR_PROVIDER/);
 });
 
-test('OpenRouter OCR provider defaults its model and requires an API key', () => {
-  assert.equal(parseOcrProvider('openrouter'), 'openrouter');
-
-  assert.throws(
-    () => loadConfig({
-      LEGALSERVER_BASE_URL: 'https://example.legalserver.org/',
-      LEGALSERVER_BEARER_TOKEN: 'token',
-      DOCUMENT_OCR_PROVIDER: 'openrouter',
-    }),
-    /OPENROUTER_API_KEY/,
-  );
-
-  const config = loadConfig({
-    LEGALSERVER_BASE_URL: 'https://example.legalserver.org/',
-    LEGALSERVER_BEARER_TOKEN: 'token',
-    DOCUMENT_OCR_PROVIDER: 'openrouter',
+test('loadConfig refuses to boot when an unreleased OCR provider is enabled', () => {
+  // Credentials are supplied deliberately: enabling OCR must fail because the feature is
+  // unsupported, not merely because a key is missing.
+  const credentials = {
+    GOOGLE_CLOUD_PROJECT: 'proj-1',
     OPENROUTER_API_KEY: 'sk-or-test-key',
-  });
-
-  assert.equal(config.documentOcrProvider, 'openrouter');
-  assert.equal(config.documentOcrModel, 'google/gemini-2.5-flash');
-  assert.equal(config.openRouterApiKey, 'sk-or-test-key');
-
-  const withCustomModel = loadConfig({
-    LEGALSERVER_BASE_URL: 'https://example.legalserver.org/',
-    LEGALSERVER_BEARER_TOKEN: 'token',
-    DOCUMENT_OCR_PROVIDER: 'openrouter',
-    OPENROUTER_API_KEY: 'sk-or-test-key',
-    DOCUMENT_OCR_MODEL: 'google/gemini-2.5-flash-lite',
-  });
-  assert.equal(withCustomModel.documentOcrModel, 'google/gemini-2.5-flash-lite');
-});
-
-test('OpenAI OCR provider defaults its model and requires an API key', () => {
-  assert.equal(parseOcrProvider('openai'), 'openai');
-
-  assert.throws(
-    () => loadConfig({
-      LEGALSERVER_BASE_URL: 'https://example.legalserver.org/',
-      LEGALSERVER_BEARER_TOKEN: 'token',
-      DOCUMENT_OCR_PROVIDER: 'openai',
-    }),
-    /OPENAI_API_KEY/,
-  );
-
-  const config = loadConfig({
-    LEGALSERVER_BASE_URL: 'https://example.legalserver.org/',
-    LEGALSERVER_BEARER_TOKEN: 'token',
-    DOCUMENT_OCR_PROVIDER: 'openai',
     OPENAI_API_KEY: 'sk-test-key',
-  });
+  };
 
-  assert.equal(config.documentOcrProvider, 'openai');
-  assert.equal(config.documentOcrModel, 'gpt-5.6-luna');
-  assert.equal(config.openAiApiKey, 'sk-test-key');
+  for (const provider of ['vertex_gemini', 'openrouter', 'openai']) {
+    assert.throws(
+      () => loadConfig({
+        LEGALSERVER_BASE_URL: 'https://example.legalserver.org/',
+        LEGALSERVER_BEARER_TOKEN: 'token',
+        DOCUMENT_OCR_PROVIDER: provider,
+        ...credentials,
+      }),
+      new RegExp(`DOCUMENT_OCR_PROVIDER=${provider} is not supported in this release`),
+      `${provider} should be rejected at boot`,
+    );
 
-  const withCustomModel = loadConfig({
-    LEGALSERVER_BASE_URL: 'https://example.legalserver.org/',
-    LEGALSERVER_BEARER_TOKEN: 'token',
-    DOCUMENT_OCR_PROVIDER: 'openai',
-    OPENAI_API_KEY: 'sk-test-key',
-    DOCUMENT_OCR_MODEL: 'gpt-4o',
-  });
-  assert.equal(withCustomModel.documentOcrModel, 'gpt-4o');
+    assert.throws(() => parseOcrProvider(provider), /not supported in this release/);
+  }
 });

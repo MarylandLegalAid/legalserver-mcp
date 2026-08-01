@@ -24,23 +24,9 @@ Version: `3.0.0`
   - `LEGALSERVER_CURRENT_USER_MATTERS_REPORT_URL` (optional Reports API URL for `matter_list_current_user` / `matter_list_current_user_active`)
   - `MATTER_CURRENT_USER_CACHE_TTL_MS` (default `60000`, `0` disables current-user matter caching)
   - `MATTER_CURRENT_USER_FETCH_CONCURRENCY` (default `4`, max `8`)
-- Optional OCR — three providers, pick one:
-  - `DOCUMENT_OCR_PROVIDER=vertex_gemini`
-    - `DOCUMENT_OCR_MODEL` (default `gemini-2.5-flash`)
-    - `GOOGLE_CLOUD_PROJECT` required
-    - `GOOGLE_CLOUD_LOCATION` (default `global`)
-    - ADC credentials via runtime identity, `gcloud auth application-default login`, or `GOOGLE_APPLICATION_CREDENTIALS`
-  - `DOCUMENT_OCR_PROVIDER=openrouter`
-    - `DOCUMENT_OCR_MODEL` (default `google/gemini-2.5-flash`; any vision-capable OpenRouter model slug works)
-    - `OPENROUTER_API_KEY` required — no GCP project, billing account, or service account needed
-    - page images are proxied through OpenRouter to whichever underlying model you pick
-  - `DOCUMENT_OCR_PROVIDER=openai`
-    - `DOCUMENT_OCR_MODEL` (default `gpt-5.6-luna`; any vision-capable OpenAI model slug works)
-    - `OPENAI_API_KEY` required
-    - calls `api.openai.com` directly, never proxied — use this one if page images need to go
-      straight to OpenAI specifically (e.g. an existing ZDR/BAA agreement scoped to OpenAI)
+- OCR: **not supported in this release.** Leave `DOCUMENT_OCR_PROVIDER=none` — see [OCR Is Not Supported Yet](#ocr-is-not-supported-yet).
 
-Digital-text TXT, DOCX, and many PDFs work without OCR. Scanned PDFs and supported images fail explicitly with `error_code: "ocr_unavailable"` until OCR is configured.
+TXT, DOCX, RTF, EML, and PDFs that carry an embedded text layer all extract without OCR. Scanned PDFs and image documents fail explicitly with `error_code: "ocr_unavailable"` (`412`).
 
 ## Install
 
@@ -78,6 +64,7 @@ LEGALSERVER_CURRENT_USER_TASKS_REPORT_URL=
 LEGALSERVER_CURRENT_USER_MATTERS_REPORT_URL=
 MATTER_CURRENT_USER_CACHE_TTL_MS=60000
 MATTER_CURRENT_USER_FETCH_CONCURRENCY=4
+# Reserved for a future release. OCR is not supported yet — leave these as-is.
 DOCUMENT_OCR_PROVIDER=none
 DOCUMENT_OCR_MODEL=gemini-2.5-flash
 GOOGLE_CLOUD_PROJECT=
@@ -89,11 +76,20 @@ OPENAI_API_KEY=
 
 Use `LEGALSERVER_BEARER_TOKEN`, not `LEGALSERVER_API_TOKEN`.
 
-When `DOCUMENT_OCR_PROVIDER=vertex_gemini`, set `GOOGLE_CLOUD_PROJECT` and ensure ADC is available either from the runtime environment, `gcloud auth application-default login`, or `GOOGLE_APPLICATION_CREDENTIALS`.
+## OCR Is Not Supported Yet
 
-When `DOCUMENT_OCR_PROVIDER=openrouter`, set `OPENROUTER_API_KEY`. Requests go to `https://openrouter.ai/api/v1/chat/completions` with the page image as a base64 `image_url` content part (the standard OpenAI-compatible vision request shape) — any vision-capable model slug works via `DOCUMENT_OCR_MODEL`, default `google/gemini-2.5-flash`.
+OCR is a planned future feature. It is **not supported in this release**, and `DOCUMENT_OCR_PROVIDER` should be left at `none`.
 
-When `DOCUMENT_OCR_PROVIDER=openai`, set `OPENAI_API_KEY`. Requests go directly to `https://api.openai.com/v1/chat/completions` — the same request shape as the `openrouter` provider, but never proxied through a third party, which matters if your org's data-handling agreement with OpenAI (e.g. zero data retention, a BAA) is scoped to OpenAI specifically. Default model is `gpt-5.6-luna`; any vision-capable OpenAI model slug works via `DOCUMENT_OCR_MODEL`.
+Documents that would require OCR fail cleanly rather than silently returning empty text:
+
+- scanned PDFs with no embedded text layer (under `100` non-whitespace chars) → `error_code: "ocr_unavailable"` (`412`)
+- `image/png`, `image/jpeg`, and `image/webp` documents → `error_code: "ocr_unavailable"` (`412`)
+
+One consequence worth knowing: `matter_search_document_text` treats `ocr_unavailable` as a skippable per-document error, so a matter-wide search across scanned documents succeeds while quietly omitting them. The skipped documents are listed in `warnings` — read that field before treating a matter-wide search as exhaustive.
+
+The repo carries unreleased provider scaffolding behind `DOCUMENT_OCR_PROVIDER` (`vertex_gemini`, `openrouter`, `openai`) and the matching env vars. That code is not run in production and is not covered end to end by tests, so the server **refuses to start** if `DOCUMENT_OCR_PROVIDER` is set to anything other than `none` — a misconfiguration fails loudly at boot rather than half-working at request time. Treat `DOCUMENT_OCR_MODEL`, `GOOGLE_CLOUD_PROJECT`, `GOOGLE_CLOUD_LOCATION`, `GOOGLE_APPLICATION_CREDENTIALS`, `OPENROUTER_API_KEY`, and `OPENAI_API_KEY` as reserved.
+
+Known gap for anyone picking this work up later: `splitPdfIntoSinglePageBuffers` emits one single-page **PDF** per page and the providers send it as a `data:application/pdf` URI, but the OpenAI-compatible `image_url` content part is specified for raster images. A rasterization step (for example `pdftoppm` at 300 DPI) is therefore a prerequisite for any working OCR provider, cloud or local — the provider classes alone are not sufficient.
 
 ## Tool Set
 
@@ -191,14 +187,16 @@ When evaluating report replacements, keep the reports narrow and filtered. Legal
 - `ocr` for `image/png`, `image/jpeg`, and `image/webp`
 - `unsupported` for everything else
 
+`text_strategy` describes what a document *would* need, not what this release can do. Because [OCR is not supported yet](#ocr-is-not-supported-yet), a `text_strategy` of `ocr` always fails with `ocr_unavailable`, and `direct_or_ocr` succeeds only when the PDF has an embedded text layer.
+
 Extraction rules:
 
 - TXT: UTF-8 decode and normalize
 - DOCX: `mammoth.extractRawText`
 - RTF: in-process plain-text conversion with paragraph preservation where possible
 - EML: RFC822-style header/body extraction, `text/plain` preferred, HTML converted to plain text
-- PDF: embedded text first, OCR fallback when normalized embedded text is under `100` non-whitespace chars
-- Images: OCR only for PNG, JPEG, and WebP
+- PDF: embedded text only; a PDF whose normalized embedded text is under `100` non-whitespace chars is treated as scanned and fails with `ocr_unavailable`
+- Images: PNG, JPEG, and WebP are recognized but always fail with `ocr_unavailable`
 - Max document size: `50 MB`
 
 The server caches canonical text, chunk metadata, page offsets, and a SHA-256 text hash in memory for the lifetime of the process. It never caches raw document bytes.
@@ -213,6 +211,7 @@ Phase 2.5 resolves document binaries from LegalServer document identifiers first
 
 Phase 2 intentionally does not expose:
 
+- OCR for scanned PDFs and image documents (planned future feature — see [OCR Is Not Supported Yet](#ocr-is-not-supported-yet))
 - raw file downloads
 - full-document text dumps
 - fuzzy search
@@ -258,7 +257,7 @@ Errors keep the same shape and add:
 First-class internal error codes:
 
 - `unsupported_media_type` (`415`)
-- `ocr_unavailable` (`412`)
+- `ocr_unavailable` (`412`) — returned for every scanned PDF and image document, since OCR is not supported in this release
 - `document_too_large` (`413`)
 - `chunk_out_of_range` (`400`)
 - `extraction_failed` (`502`)

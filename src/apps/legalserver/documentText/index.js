@@ -895,7 +895,7 @@ class DocumentTextPipeline {
     if (!this.ocrProvider) {
       throw new ToolError({
         errorCode: 'ocr_unavailable',
-        message: 'OCR is required for this document, but DOCUMENT_OCR_PROVIDER is not configured.',
+        message: 'This document requires OCR, which is not supported in this release.',
         status: 412,
       });
     }

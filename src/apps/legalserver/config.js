@@ -85,16 +85,29 @@ function parseHttpPort(rawPort) {
   return port;
 }
 
+// OCR is not supported in this release — see "OCR Is Not Supported Yet" in README.md.
+// The provider scaffolding in documentText/ocrProviders.js is kept but unreleased, so enabling
+// it is rejected at boot rather than allowed to half-work at request time.
+const UNRELEASED_OCR_PROVIDERS = new Set(['vertex_gemini', 'openrouter', 'openai']);
+
 function parseOcrProvider(rawProvider) {
   const provider = (rawProvider || 'none').trim().toLowerCase();
 
-  if (provider === 'none' || provider === 'vertex_gemini' || provider === 'openrouter' || provider === 'openai') {
+  if (provider === 'none') {
     return provider;
   }
 
-  throw new Error('DOCUMENT_OCR_PROVIDER must be one of: none, vertex_gemini, openrouter, openai');
+  if (UNRELEASED_OCR_PROVIDERS.has(provider)) {
+    throw new Error(
+      `DOCUMENT_OCR_PROVIDER=${provider} is not supported in this release. `
+      + 'OCR is a planned future feature; set DOCUMENT_OCR_PROVIDER=none.',
+    );
+  }
+
+  throw new Error('DOCUMENT_OCR_PROVIDER must be none — OCR is not supported in this release');
 }
 
+// Only the `none` branch is reachable while OCR is unsupported; the rest is kept for revival.
 function defaultOcrModel(provider) {
   if (provider === 'openrouter') {
     return 'google/gemini-2.5-flash';
@@ -156,22 +169,12 @@ function loadConfig(env) {
     throw new Error('LEGALSERVER_BEARER_TOKEN environment variable is required');
   }
 
+  // parseOcrProvider rejects every provider but `none`, so the per-provider credential checks
+  // that used to live here are unreachable. Restore them alongside the provider itself.
   const documentOcrProvider = parseOcrProvider(env.DOCUMENT_OCR_PROVIDER);
   const googleCloudProject = normalizeOptionalString(env.GOOGLE_CLOUD_PROJECT);
   const openRouterApiKey = normalizeOptionalString(env.OPENROUTER_API_KEY);
   const openAiApiKey = normalizeOptionalString(env.OPENAI_API_KEY);
-
-  if (documentOcrProvider === 'vertex_gemini' && !googleCloudProject) {
-    throw new Error('GOOGLE_CLOUD_PROJECT environment variable is required when DOCUMENT_OCR_PROVIDER=vertex_gemini');
-  }
-
-  if (documentOcrProvider === 'openrouter' && !openRouterApiKey) {
-    throw new Error('OPENROUTER_API_KEY environment variable is required when DOCUMENT_OCR_PROVIDER=openrouter');
-  }
-
-  if (documentOcrProvider === 'openai' && !openAiApiKey) {
-    throw new Error('OPENAI_API_KEY environment variable is required when DOCUMENT_OCR_PROVIDER=openai');
-  }
 
   return {
     baseUrl: normalizeBaseUrl(env.LEGALSERVER_BASE_URL),

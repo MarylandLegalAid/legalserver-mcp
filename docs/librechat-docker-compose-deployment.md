@@ -105,6 +105,7 @@ MCP_SHARED_SECRET=replace-this-with-a-long-random-secret
 MCP_SHARED_SECRET_HEADER=x-legalserver-mcp-secret
 LEGALSERVER_USER_EMAIL_HEADER=x-legalserver-user-email
 
+# Reserved for a future release. OCR is not supported yet — leave these as-is.
 DOCUMENT_OCR_PROVIDER=none
 DOCUMENT_OCR_MODEL=gemini-2.5-flash
 GOOGLE_CLOUD_PROJECT=
@@ -122,7 +123,7 @@ Important notes:
 - `LEGALSERVER_USER_EMAIL_HEADER` is the header name the MCP will inspect for the current user email.
 - `MCP_HTTP_HOST=0.0.0.0` is correct inside the container.
 
-If you want OCR for scanned PDFs or images, configure the OCR variables now. If you do not need OCR yet, leave `DOCUMENT_OCR_PROVIDER=none`. Three providers are supported: `vertex_gemini` (GCP project + service account, via `GOOGLE_CLOUD_PROJECT`/`GOOGLE_APPLICATION_CREDENTIALS`), `openrouter` (just `OPENROUTER_API_KEY`, no GCP setup needed, proxied through OpenRouter), or `openai` (just `OPENAI_API_KEY`, calls `api.openai.com` directly with no proxy — see `README.md`).
+OCR is **not supported in this release** — it is a planned future feature. Leave `DOCUMENT_OCR_PROVIDER=none` and leave the other OCR variables blank; they are reserved. Scanned PDFs and image documents will fail with `error_code: "ocr_unavailable"` (`412`), and `matter_search_document_text` will skip them and list them in `warnings`. See the "OCR Is Not Supported Yet" section of `README.md` before promising OCR to your users.
 
 ## Step 3: Add The MCP Service To Docker Compose
 
@@ -457,7 +458,7 @@ Typical causes:
 
 - missing `LEGALSERVER_BEARER_TOKEN`
 - invalid `LEGALSERVER_BASE_URL`
-- OCR enabled without required OCR config
+- `DOCUMENT_OCR_PROVIDER` set to anything other than `none` — the server rejects this at boot because OCR is unsupported, even if credentials are present (see Step 2)
 
 ### Symptom: `missing_shared_secret` or `invalid_shared_secret`
 
@@ -498,6 +499,16 @@ Check:
 - the corresponding LegalServer user email
 
 Those need to match closely enough for the MCP's exact-email resolution to find one user.
+
+### Symptom: `ocr_unavailable`, or an assistant reporting it "cannot read" a scanned PDF
+
+Cause:
+
+- the document has no embedded text layer (it is a scan or a photo), and OCR is not supported in this release
+
+This is expected behavior, not a misconfiguration. There is no env change that fixes it — see "OCR Is Not Supported Yet" in `README.md`.
+
+Note that `matter_search_document_text` does not surface this as an error. It skips affected documents and lists them in `warnings`, so a matter-wide search can look successful while omitting every scanned document in the matter. Tell your users this, or they will read an empty search result as "the matter contains nothing about X."
 
 ### Symptom: `multiple_matches`
 

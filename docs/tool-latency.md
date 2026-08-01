@@ -18,6 +18,12 @@ release with a report-backed path (`LEGALSERVER_CURRENT_USER_MATTERS_REPORT_URL`
 (`LEGALSERVER_CURRENT_USER_EVENTS_REPORT_URL` / `LEGALSERVER_CURRENT_USER_TASKS_REPORT_URL`) —
 their slow numbers below reflect the unconfigured REST-scan fallback, not the report path.
 
+OCR is not supported in this release (see "OCR Is Not Supported Yet" in `README.md`). The
+`document_get_text_manifest` OCR/scanned scenarios below therefore measure a feature that no
+longer ships — their `extraction_failed` errors were recorded while an OCR provider was
+configured at benchmark time and should not be read as a current regression. Drop those
+scenarios on the next regeneration unless OCR has shipped by then.
+
 ## Summary
 - Strong report candidates:
 - `event_list_by_date` (events on date)
