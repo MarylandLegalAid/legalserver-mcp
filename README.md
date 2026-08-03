@@ -356,6 +356,12 @@ The root package and Dockerfile deploy this service as a single process. On Rend
 
 For the older private Docker Compose deployment model, see [`docs/librechat-docker-compose-deployment.md`](./docs/librechat-docker-compose-deployment.md).
 
+## Sample Agents
+
+[`docs/sample-agents.md`](./docs/sample-agents.md) carries working agent configurations for this server — prompt and tool selection together, with the reasoning behind what is left disabled. They are reference samples any LegalServer tenant can adapt; variants run in production at Maryland Legal Aid.
+
+If you are enabling OCR, read the scanned-documents section there. `matter_search_document_text` reports scanned documents rather than reading them, and an agent that ignores `meta.documents_requiring_ocr` will summarize a matter while silently omitting every scan in it.
+
 Example service block:
 
 ```yaml
