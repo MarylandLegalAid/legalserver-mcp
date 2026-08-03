@@ -1,4 +1,5 @@
 const {
+  DEFAULT_DOCUMENT_OCR_MAX_PAGES,
   DEFAULT_MATTER_CURRENT_USER_CACHE_TTL_MS,
   DEFAULT_MATTER_CURRENT_USER_FETCH_CONCURRENCY,
   DEFAULT_TIMEOUT_MS,
@@ -85,10 +86,7 @@ function parseHttpPort(rawPort) {
   return port;
 }
 
-// OCR is not supported in this release — see "OCR Is Not Supported Yet" in README.md.
-// The OpenAI provider in documentText/ocrProviders.js is kept but unreleased, so enabling it is
-// rejected at boot rather than allowed to half-work at request time.
-const UNRELEASED_OCR_PROVIDERS = new Set(['openai']);
+const SUPPORTED_OCR_PROVIDERS = new Set(['none', 'openai']);
 
 // Removed outright: page images went to a third party, which puts them outside a data-handling
 // agreement scoped to a single vendor. OpenAI is the only OCR vendor this server will support.
@@ -97,29 +95,36 @@ const REMOVED_OCR_PROVIDERS = new Set(['openrouter', 'vertex_gemini']);
 function parseOcrProvider(rawProvider) {
   const provider = (rawProvider || 'none').trim().toLowerCase();
 
-  if (provider === 'none') {
+  if (SUPPORTED_OCR_PROVIDERS.has(provider)) {
     return provider;
   }
 
   if (REMOVED_OCR_PROVIDERS.has(provider)) {
     throw new Error(
       `DOCUMENT_OCR_PROVIDER=${provider} has been removed. OCR is supported through OpenAI only, `
-      + 'so that page images stay with one vendor; set DOCUMENT_OCR_PROVIDER=none.',
+      + 'so that page images stay with one vendor; set DOCUMENT_OCR_PROVIDER=openai or none.',
     );
   }
 
-  if (UNRELEASED_OCR_PROVIDERS.has(provider)) {
-    throw new Error(
-      `DOCUMENT_OCR_PROVIDER=${provider} is not supported in this release. `
-      + 'OCR is a planned future feature; set DOCUMENT_OCR_PROVIDER=none.',
-    );
-  }
-
-  throw new Error('DOCUMENT_OCR_PROVIDER must be none — OCR is not supported in this release');
+  throw new Error('DOCUMENT_OCR_PROVIDER must be none or openai');
 }
 
-// Vision-capable OpenAI model used when DOCUMENT_OCR_MODEL is unset. Unused while OCR is
-// unsupported, but it is what documentOcrModel reports, so it should name a real model.
+function parseDocumentOcrMaxPages(rawValue) {
+  const parsed = parseNonNegativeInteger(
+    rawValue,
+    DEFAULT_DOCUMENT_OCR_MAX_PAGES,
+    'DOCUMENT_OCR_MAX_PAGES',
+  );
+
+  if (parsed === 0) {
+    throw new Error('DOCUMENT_OCR_MAX_PAGES must be at least 1');
+  }
+
+  return parsed;
+}
+
+// Vision-capable OpenAI model used when DOCUMENT_OCR_MODEL is unset. Keep the full slug: the
+// bare `gpt-5.6` alias routes to a different tier (Sol), not Luna.
 const DEFAULT_OCR_MODEL = 'gpt-5.6-luna';
 
 function normalizeOptionalString(value) {
@@ -173,10 +178,14 @@ function loadConfig(env) {
     throw new Error('LEGALSERVER_BEARER_TOKEN environment variable is required');
   }
 
-  // parseOcrProvider rejects every provider but `none`, so the OPENAI_API_KEY presence check
-  // that belongs here is unreachable. Restore it alongside the provider itself.
   const documentOcrProvider = parseOcrProvider(env.DOCUMENT_OCR_PROVIDER);
   const openAiApiKey = normalizeOptionalString(env.OPENAI_API_KEY);
+
+  // Fail at boot rather than at request time. Without this the server starts happily and every
+  // scanned document fails later with a 502 that looks like an OpenAI outage.
+  if (documentOcrProvider === 'openai' && !openAiApiKey) {
+    throw new Error('OPENAI_API_KEY environment variable is required when DOCUMENT_OCR_PROVIDER=openai');
+  }
 
   return {
     baseUrl: normalizeBaseUrl(env.LEGALSERVER_BASE_URL),
@@ -184,6 +193,7 @@ function loadConfig(env) {
     timeoutMs: parseTimeout(env.LEGALSERVER_TIMEOUT_MS),
     documentOcrProvider,
     documentOcrModel: normalizeOptionalString(env.DOCUMENT_OCR_MODEL) || DEFAULT_OCR_MODEL,
+    documentOcrMaxPages: parseDocumentOcrMaxPages(env.DOCUMENT_OCR_MAX_PAGES),
     openAiApiKey,
     httpHost: normalizeOptionalString(env.MCP_HTTP_HOST) || '127.0.0.1',
     httpPort: parseHttpPort(env.PORT || env.MCP_HTTP_PORT),
@@ -217,6 +227,7 @@ module.exports = {
   normalizeOptionalString,
   normalizeOptionalUrl,
   normalizeBaseUrl,
+  parseDocumentOcrMaxPages,
   parseNonNegativeInteger,
   parseOcrProvider,
   parseHttpPort,

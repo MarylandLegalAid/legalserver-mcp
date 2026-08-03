@@ -26,6 +26,19 @@ class OpenAiOcrProvider {
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
+        // Hardcoded, and deliberately not configurable — there is no env var that turns this
+        // off. These requests carry page images of scanned client documents, and `store: false`
+        // keeps them from being retained as a retrievable object (dashboard logs, API-side
+        // conversation state, evals/distillation).
+        //
+        // It is NOT zero retention. Abuse-monitoring retention is governed by a ZDR agreement on
+        // the operator's own OpenAI account, which this code cannot assert — and even ZDR does
+        // not cover an image the CSAM classifier flags for manual review. See "When OCR ships,
+        // Zero Data Retention is your responsibility" in README.md.
+        //
+        // Worth knowing if this ever moves to the Responses API: `store` defaults to true there,
+        // so sending it explicitly is what makes this survive an endpoint migration.
+        store: false,
         model: this.model,
         temperature: 0,
         messages: [{
@@ -43,6 +56,10 @@ class OpenAiOcrProvider {
       }),
       signal: AbortSignal.timeout(this.timeoutMs),
     });
+
+    // No `user` / `safety_identifier` field is sent, deliberately. The server has the signed-in
+    // staff member's email in request context and passing it here would be trivial, but that
+    // attaches an identifiable legal-aid worker to every scanned client document.
 
     if (!response.ok) {
       throw new Error(`api.openai.com returned ${response.status}`);

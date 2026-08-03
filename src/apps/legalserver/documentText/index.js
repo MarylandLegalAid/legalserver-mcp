@@ -5,6 +5,7 @@ const {
   DOCUMENT_CHUNK_OVERLAP_CHARS,
   DOCUMENT_CHUNK_TARGET_CHARS,
   DOCUMENT_SEARCH_SNIPPET_MAX_CHARS,
+  DEFAULT_DOCUMENT_OCR_MAX_PAGES,
   PDF_EMBEDDED_TEXT_MIN_CHARS,
   PDF_RASTER_DPI,
   PDF_RASTER_PAGE_TIMEOUT_MS,
@@ -953,9 +954,12 @@ class DocumentTextPipeline {
         };
       }
 
-      // Checked before rasterizing: with no provider configured this document is going to fail
-      // anyway, and rendering every page first would burn a pdftoppm process per page for nothing.
+      // Both checks run before rasterizing. This document is going to fail either way, and
+      // rendering every page first would burn a pdftoppm process per page for nothing.
+      // embeddedPages is one entry per page even when a scan yields no text, so it is a usable
+      // page count without loading the PDF a second time.
       this.ensureOcrAvailable();
+      this.ensureOcrPageBudget(embeddedPages.length);
 
       const ocrPages = await this.extractWithOcr(await this.extractors.rasterizePdfIntoPageImages(buffer));
       return {
@@ -988,16 +992,34 @@ class DocumentTextPipeline {
 
   ensureOcrAvailable() {
     if (!this.ocrProvider) {
+      // Reaches end users through the MCP client, so it names no environment variable: the
+      // person reading it is a caseworker who cannot change the server's configuration.
       throw new ToolError({
         errorCode: 'ocr_unavailable',
-        message: 'This document requires OCR, which is not supported in this release.',
+        message: 'This document requires OCR, which is not enabled on this server.',
         status: 412,
+      });
+    }
+  }
+
+  // Each page is a separate vision API call, so an unbounded document is a cost, latency, and
+  // exposure problem all at once. Fail loudly rather than transcribing a truncated prefix and
+  // returning it as if it were the whole document.
+  ensureOcrPageBudget(pageCount) {
+    const maxPages = this.config?.documentOcrMaxPages ?? DEFAULT_DOCUMENT_OCR_MAX_PAGES;
+
+    if (pageCount > maxPages) {
+      throw new ToolError({
+        errorCode: 'document_too_large',
+        message: `This document has ${pageCount} pages requiring OCR, over the ${maxPages}-page limit.`,
+        status: 413,
       });
     }
   }
 
   async extractWithOcr(pages) {
     this.ensureOcrAvailable();
+    this.ensureOcrPageBudget(pages.length);
 
     const results = await this.ocrProvider.extractPages(pages);
     return results.map((page) => page.text || '');

@@ -18,11 +18,12 @@ release with a report-backed path (`LEGALSERVER_CURRENT_USER_MATTERS_REPORT_URL`
 (`LEGALSERVER_CURRENT_USER_EVENTS_REPORT_URL` / `LEGALSERVER_CURRENT_USER_TASKS_REPORT_URL`) —
 their slow numbers below reflect the unconfigured REST-scan fallback, not the report path.
 
-OCR is not supported in this release (see "OCR Is Not Supported Yet" in `README.md`). The
-`document_get_text_manifest` OCR/scanned scenarios below therefore measure a feature that no
-longer ships — their `extraction_failed` errors were recorded while an OCR provider was
-configured at benchmark time and should not be read as a current regression. Drop those
-scenarios on the next regeneration unless OCR has shipped by then.
+OCR now ships as an opt-in OpenAI provider (see "OCR" in `README.md`), but the
+`document_get_text_manifest` OCR/scanned scenarios below predate it and measure neither the
+old behavior nor the new one — their `extraction_failed` errors were recorded against a
+provider configuration that no longer exists, and the PDF rasterization those scenarios now
+depend on did not exist either. Re-run them against a deployment with
+`DOCUMENT_OCR_PROVIDER=openai` on the next regeneration.
 
 ## Summary
 - Strong report candidates:

@@ -21,6 +21,7 @@ test('.env.example exposes phase 2 OCR configuration', () => {
   assert.match(envExample, /^MATTER_CURRENT_USER_FETCH_CONCURRENCY=/m);
   assert.match(envExample, /^DOCUMENT_OCR_PROVIDER=/m);
   assert.match(envExample, /^DOCUMENT_OCR_MODEL=/m);
+  assert.match(envExample, /^DOCUMENT_OCR_MAX_PAGES=/m);
   assert.match(envExample, /^OPENAI_API_KEY=/m);
 
   // The removed providers must not reappear as copy-paste-able settings.
@@ -43,8 +44,13 @@ test('.env.example exposes phase 2 OCR configuration', () => {
 // template has to say so where they will actually read it.
 test('.env.example names Zero Data Retention as an operator responsibility for OCR', () => {
   const envExample = fs.readFileSync(path.join(__dirname, '../../.env.example'), 'utf8');
+  // Comment prose wraps across lines, so unwrap before matching phrases. Otherwise the test
+  // breaks on reflowed text rather than on the warning actually being dropped.
+  const unwrapped = envExample.replace(/\n#\s*/g, ' ');
 
-  assert.match(envExample, /Zero Data Retention/);
-  assert.match(envExample, /store: false/);
-  assert.match(envExample, /NOT[\s#]+zero retention/);
+  assert.match(unwrapped, /Zero Data Retention agreement on YOUR OpenAI account/);
+  assert.match(unwrapped, /store: false/);
+  assert.match(unwrapped, /NOT zero retention/);
+  // The carve-out is the part an operator is most likely to be surprised by.
+  assert.match(unwrapped, /CSAM classifier/);
 });

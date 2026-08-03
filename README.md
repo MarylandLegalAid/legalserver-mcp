@@ -9,7 +9,7 @@ Version: `3.0.0`
 ## Requirements
 
 - Node `20+`
-- `poppler-utils` (provides `pdftoppm`) — only needed for OCR, which is not supported yet; the container image installs it
+- `poppler-utils` (provides `pdftoppm`) — required only when OCR is enabled; the container image installs it
 - `LEGALSERVER_BASE_URL`
 - `LEGALSERVER_BEARER_TOKEN`
 - Optional: `LEGALSERVER_TIMEOUT_MS` (default `30000`)
@@ -25,9 +25,13 @@ Version: `3.0.0`
   - `LEGALSERVER_CURRENT_USER_MATTERS_REPORT_URL` (optional Reports API URL for `matter_list_current_user` / `matter_list_current_user_active`)
   - `MATTER_CURRENT_USER_CACHE_TTL_MS` (default `60000`, `0` disables current-user matter caching)
   - `MATTER_CURRENT_USER_FETCH_CONCURRENCY` (default `4`, max `8`)
-- OCR: **not supported in this release.** Leave `DOCUMENT_OCR_PROVIDER=none` — see [OCR Is Not Supported Yet](#ocr-is-not-supported-yet).
+- Optional OCR (off by default) — see [OCR](#ocr):
+  - `DOCUMENT_OCR_PROVIDER` (`none` default, or `openai`)
+  - `OPENAI_API_KEY` (required when the provider is `openai`)
+  - `DOCUMENT_OCR_MODEL` (default `gpt-5.6-luna`)
+  - `DOCUMENT_OCR_MAX_PAGES` (default `50`)
 
-TXT, DOCX, RTF, EML, and PDFs that carry an embedded text layer all extract without OCR. Scanned PDFs and image documents fail explicitly with `error_code: "ocr_unavailable"` (`412`).
+TXT, DOCX, RTF, EML, and PDFs that carry an embedded text layer all extract without OCR. Scanned PDFs and image documents need OCR; with it disabled they fail explicitly with `error_code: "ocr_unavailable"` (`412`).
 
 ## Install
 
@@ -65,30 +69,42 @@ LEGALSERVER_CURRENT_USER_TASKS_REPORT_URL=
 LEGALSERVER_CURRENT_USER_MATTERS_REPORT_URL=
 MATTER_CURRENT_USER_CACHE_TTL_MS=60000
 MATTER_CURRENT_USER_FETCH_CONCURRENCY=4
-# Reserved for a future release. OCR is not supported yet — leave these as-is.
+# OCR is off by default. See the OCR section before enabling it.
 DOCUMENT_OCR_PROVIDER=none
 DOCUMENT_OCR_MODEL=gpt-5.6-luna
+DOCUMENT_OCR_MAX_PAGES=50
 OPENAI_API_KEY=
 ```
 
 Use `LEGALSERVER_BEARER_TOKEN`, not `LEGALSERVER_API_TOKEN`.
 
-## OCR Is Not Supported Yet
+## OCR
 
-OCR is a planned future feature. It is **not supported in this release**, and `DOCUMENT_OCR_PROVIDER` should be left at `none`.
-
-Documents that would require OCR fail cleanly rather than silently returning empty text:
+OCR is **off by default** and opt-in. With `DOCUMENT_OCR_PROVIDER=none` (the default), scanned PDFs and image documents fail cleanly rather than silently returning empty text:
 
 - scanned PDFs with no embedded text layer (under `100` non-whitespace chars) → `error_code: "ocr_unavailable"` (`412`)
 - `image/png`, `image/jpeg`, and `image/webp` documents → `error_code: "ocr_unavailable"` (`412`)
 
-One consequence worth knowing: `matter_search_document_text` treats `ocr_unavailable` as a skippable per-document error, so a matter-wide search across scanned documents succeeds while quietly omitting them. The skipped documents are listed in `warnings` — read that field before treating a matter-wide search as exhaustive.
+To enable it:
 
-The repo carries unreleased OpenAI provider scaffolding behind `DOCUMENT_OCR_PROVIDER=openai`. That code is not run in production and is not covered end to end by tests, so the server **refuses to start** if `DOCUMENT_OCR_PROVIDER` is set to anything other than `none` — a misconfiguration fails loudly at boot rather than half-working at request time. Treat `DOCUMENT_OCR_MODEL` and `OPENAI_API_KEY` as reserved.
+```bash
+DOCUMENT_OCR_PROVIDER=openai
+OPENAI_API_KEY=sk-...
+DOCUMENT_OCR_MODEL=gpt-5.6-luna   # optional; this is the default
+DOCUMENT_OCR_MAX_PAGES=50         # optional; this is the default
+```
 
-### When OCR ships, Zero Data Retention is your responsibility
+Scanned PDF pages are rendered to PNG with `pdftoppm` at 300 DPI, one image per page, and each page is sent to OpenAI's chat completions API as a base64 `image_url` part. Requests go to `api.openai.com` directly and are never proxied. `DOCUMENT_OCR_MODEL` accepts any vision-capable OpenAI model; keep the full `gpt-5.6-luna` slug rather than the bare `gpt-5.6` alias, which routes to a different tier.
 
-Enabling OCR will not be purely a configuration change, so it is worth understanding the data-handling model **before** you plan for it.
+`DOCUMENT_OCR_MAX_PAGES` (default `50`) bounds a single document. Each page is its own API call, so an uncapped 500-page scan is 500 sequential requests. Documents over the cap fail with `document_too_large` (`413`) before anything is rendered or sent, rather than returning a truncated transcription that looks complete.
+
+The server **refuses to start** if `DOCUMENT_OCR_PROVIDER=openai` without `OPENAI_API_KEY`, so a misconfiguration fails at boot rather than turning into a 502 on every scanned document later.
+
+One consequence worth knowing whether OCR is on or off: `matter_search_document_text` treats `ocr_unavailable`, `extraction_failed`, and `document_too_large` as skippable per-document errors, so a matter-wide search succeeds while quietly omitting the documents that hit them. The skipped documents are listed in `warnings` — read that field before treating a matter-wide search as exhaustive.
+
+### Zero Data Retention is your responsibility
+
+Enabling OCR is not purely a configuration change. Understand the data-handling model **before** you turn it on.
 
 OCR works by sending page images of scanned client documents to a cloud vision model. For legal aid work those pages routinely contain client names, addresses, immigration status, medical details, and financial information. Three separate controls govern what happens to them, and **this server can only enforce two**:
 
@@ -100,7 +116,7 @@ OCR works by sending page images of scanned client documents to a cloud vision m
 
 The third row is the one that actually keeps scanned client documents out of a vendor's retention window, and **no setting in this repository can provide it**. `store: false` is not zero retention: it stops the request being kept as something anyone can pull back up, but on a standard account the payload is still retained for OpenAI's abuse-monitoring window. Only a ZDR agreement negotiated on your account changes that.
 
-If you are handling privileged or otherwise confidential client material, arrange ZDR (and, where applicable, a BAA) with OpenAI **before** you enable OCR — not after. If you cannot, leave `DOCUMENT_OCR_PROVIDER=none`; failing on scanned documents is the safer outcome.
+If you are handling privileged or otherwise confidential client material, arrange ZDR (and, where applicable, a BAA) with OpenAI **before** you set `DOCUMENT_OCR_PROVIDER=openai` — not after. If you cannot, leave it at `none`; failing on scanned documents is the safer outcome.
 
 #### The carve-out ZDR does not close
 
@@ -210,7 +226,7 @@ When evaluating report replacements, keep the reports narrow and filtered. Legal
 - `ocr` for `image/png`, `image/jpeg`, and `image/webp`
 - `unsupported` for everything else
 
-`text_strategy` describes what a document *would* need, not what this release can do. Because [OCR is not supported yet](#ocr-is-not-supported-yet), a `text_strategy` of `ocr` always fails with `ocr_unavailable`, and `direct_or_ocr` succeeds only when the PDF has an embedded text layer.
+`text_strategy` describes what a document needs, not whether this deployment can do it. When [OCR](#ocr) is disabled, a `text_strategy` of `ocr` always fails with `ocr_unavailable`, and `direct_or_ocr` succeeds only when the PDF has an embedded text layer.
 
 Extraction rules:
 
@@ -218,13 +234,14 @@ Extraction rules:
 - DOCX: `mammoth.extractRawText`
 - RTF: in-process plain-text conversion with paragraph preservation where possible
 - EML: RFC822-style header/body extraction, `text/plain` preferred, HTML converted to plain text
-- PDF: embedded text only; a PDF whose normalized embedded text is under `100` non-whitespace chars is treated as scanned and fails with `ocr_unavailable`
-- Images: PNG, JPEG, and WebP are recognized but always fail with `ocr_unavailable`
+- PDF: embedded text first; a PDF whose normalized embedded text is under `100` non-whitespace chars is treated as scanned and falls back to OCR
+- Images: PNG, JPEG, and WebP go straight to OCR
+- Max OCR pages per document: `DOCUMENT_OCR_MAX_PAGES` (default `50`), else `document_too_large`
 - Max document size: `50 MB`
 
 The server caches canonical text, chunk metadata, page offsets, and a SHA-256 text hash in memory for the lifetime of the process. It never caches raw document bytes.
 
-When OCR ships, scanned PDF pages will be rendered to PNG with `pdftoppm` at 300 DPI, one image per page, so that page numbers on search hits stay accurate. The PDF is piped to `pdftoppm` on stdin and the image read back from stdout, so no part of a client document is written to disk.
+Scanned PDF pages are rendered to PNG with `pdftoppm` at 300 DPI, one image per page, so that page numbers on search hits stay accurate. The PDF is piped to `pdftoppm` on stdin and the image read back from stdout, so no part of a client document is written to disk.
 
 Phase 2.5 resolves document binaries from LegalServer document identifiers first:
 
@@ -236,7 +253,6 @@ Phase 2.5 resolves document binaries from LegalServer document identifiers first
 
 Phase 2 intentionally does not expose:
 
-- OCR for scanned PDFs and image documents (planned future feature — see [OCR Is Not Supported Yet](#ocr-is-not-supported-yet))
 - raw file downloads
 - full-document text dumps
 - fuzzy search
@@ -282,7 +298,7 @@ Errors keep the same shape and add:
 First-class internal error codes:
 
 - `unsupported_media_type` (`415`)
-- `ocr_unavailable` (`412`) — returned for every scanned PDF and image document, since OCR is not supported in this release
+- `ocr_unavailable` (`412`) — returned for scanned PDFs and image documents when OCR is disabled
 - `document_too_large` (`413`)
 - `chunk_out_of_range` (`400`)
 - `extraction_failed` (`502`)

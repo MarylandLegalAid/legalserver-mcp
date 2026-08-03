@@ -2,7 +2,13 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const { execFileSync } = require('node:child_process');
 const { PDFDocument, StandardFonts } = require('pdf-lib');
-const { DocumentTextPipeline, rasterizePdfIntoPageImages } = require('../../src/apps/legalserver/documentText');
+const {
+  DocumentTextPipeline,
+  locatePageNumber,
+  rasterizePdfIntoPageImages,
+} = require('../../src/apps/legalserver/documentText');
+const { OpenAiOcrProvider } = require('../../src/apps/legalserver/documentText/ocrProviders');
+const { createSequentialFetch, jsonResponse } = require('../support/mockFetch');
 
 // pdftoppm ships in the container image (see Dockerfile) and CI installs it, but a developer
 // machine may not have poppler-utils. Skip rather than fail there.
@@ -130,4 +136,145 @@ test('pipeline does not rasterize a scanned PDF when no OCR provider is configur
   );
 
   assert.equal(rasterizeCalls, 0);
+});
+
+// A 200-page scan is 200 sequential vision API calls. Without a cap that is a cost, latency,
+// and exposure problem, and the failure mode without it is worse than an error: a truncated
+// transcription returned as if it were the whole document.
+test('pipeline rejects a scanned PDF over the OCR page budget before rasterizing', async () => {
+  let rasterizeCalls = 0;
+  let ocrCalls = 0;
+
+  const pipeline = new DocumentTextPipeline({
+    client: {
+      async downloadDocumentBinary() {
+        return {
+          buffer: Buffer.from('%PDF-1.4 fixture'),
+          contentType: 'application/pdf',
+          contentDisposition: null,
+          contentLength: 16,
+          filename: 'huge-scan.pdf',
+          url: 'https://example.legalserver.org/modules/document/download.php?id=901',
+        };
+      },
+    },
+    config: {
+      documentOcrProvider: 'openai',
+      documentOcrModel: 'gpt-5.6-luna',
+      documentOcrMaxPages: 3,
+    },
+    ocrProvider: {
+      async extractPages(pages) {
+        ocrCalls += 1;
+        return pages.map((page) => ({ pageNumber: page.pageNumber, text: '' }));
+      },
+    },
+    extractors: {
+      async extractPdfTextPages() {
+        return ['', '', '', '', ''];
+      },
+      async rasterizePdfIntoPageImages() {
+        rasterizeCalls += 1;
+        return [];
+      },
+    },
+  });
+
+  await assert.rejects(
+    () => pipeline.getDocumentState({
+      caseUuid: 'matter-1',
+      documentRecord: {
+        guid: 'doc-901',
+        internal_id: 901,
+        name: 'huge-scan.pdf',
+        mime_type: 'application/pdf',
+        download_url: 'https://example.legalserver.org/modules/document/download.php?id=901',
+      },
+    }),
+    (error) => {
+      assert.equal(error.errorCode, 'document_too_large');
+      assert.equal(error.status, 413);
+      assert.match(error.message, /5 pages/);
+      assert.match(error.message, /3-page limit/);
+      return true;
+    },
+  );
+
+  assert.equal(rasterizeCalls, 0);
+  assert.equal(ocrCalls, 0);
+});
+
+// Covers the seam that has never run: a real multi-page PDF through real pdftoppm
+// rasterization into a real OpenAiOcrProvider, with page assembly and offsets on the far side.
+// Only two things are stubbed — the network, and pdf-parse's text extraction, which returns the
+// empty pages a scan yields (pdf-parse cannot read synthetic PDFs, and a real scanned binary is
+// not something to commit to a public repo). The old tests injected fake extractors AND
+// hand-built page objects, which is why the application/pdf mime bug survived as long as it did.
+test('scanned PDF flows through rasterization into the OpenAI provider as PNG', { skip: skipWithoutPdftoppm }, async () => {
+  const scannedPdf = await createPdf(['', '']);
+
+  const calls = [];
+  const fetchImpl = createSequentialFetch([
+    jsonResponse(200, { choices: [{ message: { content: 'Transcript of page one.' } }] }),
+    jsonResponse(200, { choices: [{ message: { content: 'Transcript of page two.' } }] }),
+  ], calls);
+
+  const config = {
+    documentOcrProvider: 'openai',
+    documentOcrModel: 'gpt-5.6-luna',
+    documentOcrMaxPages: 50,
+  };
+
+  const pipeline = new DocumentTextPipeline({
+    client: {
+      async downloadDocumentBinary() {
+        return {
+          buffer: scannedPdf,
+          contentType: 'application/pdf',
+          contentDisposition: null,
+          contentLength: scannedPdf.length,
+          filename: 'scanned.pdf',
+          url: 'https://example.legalserver.org/modules/document/download.php?id=902',
+        };
+      },
+    },
+    config,
+    ocrProvider: new OpenAiOcrProvider({ apiKey: 'sk-test-key', model: config.documentOcrModel, fetchImpl }),
+    extractors: {
+      async extractPdfTextPages() {
+        return ['', ''];
+      },
+    },
+  });
+
+  const state = await pipeline.getDocumentState({
+    caseUuid: 'matter-1',
+    documentRecord: {
+      guid: 'doc-902',
+      internal_id: 902,
+      name: 'scanned.pdf',
+      mime_type: 'application/pdf',
+      download_url: 'https://example.legalserver.org/modules/document/download.php?id=902',
+    },
+  });
+
+  assert.equal(state.textSource, 'pdf_ocr');
+  assert.equal(state.ocrProvider, 'openai');
+  assert.equal(state.ocrModel, 'gpt-5.6-luna');
+  assert.equal(state.pageCount, 2);
+  assert.match(state.canonicalText, /Transcript of page one\./);
+  assert.match(state.canonicalText, /Transcript of page two\./);
+
+  // Page attribution has to survive OCR or citations become useless.
+  assert.equal(state.pageOffsets.length, 2);
+  assert.equal(locatePageNumber(state.pageOffsets, state.canonicalText.indexOf('page two')), 2);
+
+  assert.equal(calls.length, 2);
+  for (const call of calls) {
+    const body = JSON.parse(call.options.body);
+    // The regression that made OCR impossible: pages must reach the vision API as raster
+    // images, never as data:application/pdf.
+    assert.match(body.messages[0].content[1].image_url.url, /^data:image\/png;base64,/);
+    assert.equal(body.store, false);
+  }
 });

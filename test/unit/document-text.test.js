@@ -439,10 +439,11 @@ test('pipeline fails explicitly when OCR is required but unavailable', async () 
     (error) => {
       assert.equal(error.errorCode, 'ocr_unavailable');
       assert.equal(error.status, 412);
-      // The message reaches end users through the MCP client, so it must not imply that
-      // OCR merely needs configuring.
-      assert.match(error.message, /not supported in this release/);
+      // Reaches end users through the MCP client, who are caseworkers with no ability to
+      // change server configuration, so it must not name an environment variable.
+      assert.match(error.message, /not enabled on this server/);
       assert.doesNotMatch(error.message, /DOCUMENT_OCR_PROVIDER/);
+      assert.doesNotMatch(error.message, /OPENAI_API_KEY/);
       return true;
     },
   );

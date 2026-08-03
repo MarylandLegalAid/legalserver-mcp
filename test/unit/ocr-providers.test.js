@@ -73,6 +73,60 @@ test('OpenAiOcrProvider sends page images directly to api.openai.com, not any pr
   assert.equal(imagePart.image_url.url, `data:image/png;base64,${bytes.toString('base64')}`);
 });
 
+// This is the confidentiality guarantee the OCR feature was built around: page images of
+// scanned client documents must never be retained by OpenAI as a retrievable object. It is
+// asserted per page, not just on the first request, because the send loop is per page and a
+// refactor could drop the flag on everything after page one. Do not relax this test — if it
+// fails, the fix is in the provider, not here.
+test('OpenAiOcrProvider sends store:false on every page request', async () => {
+  const calls = [];
+  const fetchImpl = createSequentialFetch([
+    jsonResponse(200, { choices: [{ message: { content: 'one' } }] }),
+    jsonResponse(200, { choices: [{ message: { content: 'two' } }] }),
+    jsonResponse(200, { choices: [{ message: { content: 'three' } }] }),
+  ], calls);
+
+  const provider = new OpenAiOcrProvider({
+    apiKey: 'sk-test-key',
+    model: 'gpt-5.6-luna',
+    fetchImpl,
+  });
+
+  await provider.extractPages([
+    { pageNumber: 1, bytes: Buffer.from('page-1'), mimeType: 'image/png' },
+    { pageNumber: 2, bytes: Buffer.from('page-2'), mimeType: 'image/png' },
+    { pageNumber: 3, bytes: Buffer.from('page-3'), mimeType: 'image/png' },
+  ]);
+
+  assert.equal(calls.length, 3);
+
+  for (const [index, call] of calls.entries()) {
+    const body = JSON.parse(call.options.body);
+    assert.equal(body.store, false, `page ${index + 1} did not send store:false`);
+  }
+});
+
+// Sending the signed-in caseworker's identity alongside a scanned client document would be a
+// one-line change and is deliberately not made.
+test('OpenAiOcrProvider sends no end-user identifier', async () => {
+  const calls = [];
+  const fetchImpl = createSequentialFetch([
+    jsonResponse(200, { choices: [{ message: { content: 'text' } }] }),
+  ], calls);
+
+  const provider = new OpenAiOcrProvider({
+    apiKey: 'sk-test-key',
+    model: 'gpt-5.6-luna',
+    fetchImpl,
+  });
+
+  await provider.extractPages([{ pageNumber: 1, bytes: Buffer.from('x'), mimeType: 'image/png' }]);
+
+  const body = JSON.parse(calls[0].options.body);
+  assert.equal(body.user, undefined);
+  assert.equal(body.safety_identifier, undefined);
+});
+
 // The OCR request carries a scanned client document. OpenAI 4xx bodies can echo request
 // fragments back, and this message reaches the end user through the MCP client, so the
 // response body must never be interpolated into it.

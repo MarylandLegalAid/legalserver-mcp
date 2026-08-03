@@ -105,9 +105,10 @@ MCP_SHARED_SECRET=replace-this-with-a-long-random-secret
 MCP_SHARED_SECRET_HEADER=x-legalserver-mcp-secret
 LEGALSERVER_USER_EMAIL_HEADER=x-legalserver-user-email
 
-# Reserved for a future release. OCR is not supported yet — leave these as-is.
+# OCR is off by default. See Step 2 notes before enabling it.
 DOCUMENT_OCR_PROVIDER=none
 DOCUMENT_OCR_MODEL=gpt-5.6-luna
+DOCUMENT_OCR_MAX_PAGES=50
 OPENAI_API_KEY=
 ```
 
@@ -119,11 +120,11 @@ Important notes:
 - `LEGALSERVER_USER_EMAIL_HEADER` is the header name the MCP will inspect for the current user email.
 - `MCP_HTTP_HOST=0.0.0.0` is correct inside the container.
 
-OCR is **not supported in this release** — it is a planned future feature. Leave `DOCUMENT_OCR_PROVIDER=none` and leave `OPENAI_API_KEY` blank; both are reserved. Scanned PDFs and image documents will fail with `error_code: "ocr_unavailable"` (`412`), and `matter_search_document_text` will skip them and list them in `warnings`. See the "OCR Is Not Supported Yet" section of `README.md` before promising OCR to your users.
+OCR is **off by default**. Leave `DOCUMENT_OCR_PROVIDER=none` and scanned PDFs and image documents fail with `error_code: "ocr_unavailable"` (`412`), which `matter_search_document_text` skips and lists in `warnings`. Set `DOCUMENT_OCR_PROVIDER=openai` plus `OPENAI_API_KEY` to enable it; the container also needs `poppler-utils`, which the published image already includes. Read the "OCR" section of `README.md` before promising OCR to your users.
 
 The `openrouter` and `vertex_gemini` providers that earlier revisions documented have been removed, and so have `OPENROUTER_API_KEY`, `GOOGLE_CLOUD_PROJECT`, `GOOGLE_CLOUD_LOCATION`, and `GOOGLE_APPLICATION_CREDENTIALS`. If your existing `.env` still sets `DOCUMENT_OCR_PROVIDER` to either provider, the container will now **fail at boot** with a message naming the removal. Set it to `none`.
 
-Plan ahead on one point: when OCR does ship, it sends page images of scanned client documents to OpenAI. The server will always send `store: false`, but that is not zero retention — that requires a **Zero Data Retention agreement on your own OpenAI account**, which nothing in this deployment can provide. Arrange it (and a BAA if you need one) *before* enabling OCR, not after. See "When OCR ships, Zero Data Retention is your responsibility" in `README.md`.
+Plan ahead on one point: enabling OCR sends page images of scanned client documents to OpenAI. The server will always send `store: false`, but that is not zero retention — that requires a **Zero Data Retention agreement on your own OpenAI account**, which nothing in this deployment can provide. ZDR also does not cover an image OpenAI's CSAM classifier flags, which is retained for manual human review regardless. Arrange ZDR (and a BAA if you need one) *before* enabling OCR, not after. See "Zero Data Retention is your responsibility" in `README.md`.
 
 ## Step 3: Add The MCP Service To Docker Compose
 
@@ -458,7 +459,7 @@ Typical causes:
 
 - missing `LEGALSERVER_BEARER_TOKEN`
 - invalid `LEGALSERVER_BASE_URL`
-- `DOCUMENT_OCR_PROVIDER` set to anything other than `none` — the server rejects this at boot because OCR is unsupported, even if credentials are present (see Step 2)
+- `DOCUMENT_OCR_PROVIDER=openai` without `OPENAI_API_KEY`, or set to a removed provider (`openrouter`, `vertex_gemini`) — the server rejects both at boot (see Step 2)
 
 ### Symptom: `missing_shared_secret` or `invalid_shared_secret`
 
@@ -504,9 +505,9 @@ Those need to match closely enough for the MCP's exact-email resolution to find 
 
 Cause:
 
-- the document has no embedded text layer (it is a scan or a photo), and OCR is not supported in this release
+- the document has no embedded text layer (it is a scan or a photo), and OCR is disabled (`DOCUMENT_OCR_PROVIDER=none`)
 
-This is expected behavior, not a misconfiguration. There is no env change that fixes it — see "OCR Is Not Supported Yet" in `README.md`.
+With OCR off this is expected behavior rather than a misconfiguration. Enabling OCR is an env change plus a data-handling decision — see "OCR" in `README.md`.
 
 Note that `matter_search_document_text` does not surface this as an error. It skips affected documents and lists them in `warnings`, so a matter-wide search can look successful while omitting every scanned document in the matter. Tell your users this, or they will read an empty search result as "the matter contains nothing about X."
 

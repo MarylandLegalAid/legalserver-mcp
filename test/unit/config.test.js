@@ -107,7 +107,7 @@ test('HTTP config parses optional host filtering and shared secret settings', ()
   assert.equal(config.matterCurrentUserFetchConcurrency, 6);
 });
 
-test('OCR config defaults to none, the only supported value in this release', () => {
+test('OCR config defaults to none, so OCR is opt-in', () => {
   const config = loadConfig({
     LEGALSERVER_BASE_URL: 'https://example.legalserver.org/',
     LEGALSERVER_BEARER_TOKEN: 'token',
@@ -122,20 +122,43 @@ test('OCR config defaults to none, the only supported value in this release', ()
   assert.throws(() => parseOcrProvider('bad'), /DOCUMENT_OCR_PROVIDER/);
 });
 
-test('loadConfig refuses to boot when the unreleased OpenAI OCR provider is enabled', () => {
-  // The key is supplied deliberately: enabling OCR must fail because the feature is
-  // unsupported, not merely because a credential is missing.
+test('loadConfig accepts the openai OCR provider with a key', () => {
+  const config = loadConfig({
+    LEGALSERVER_BASE_URL: 'https://example.legalserver.org/',
+    LEGALSERVER_BEARER_TOKEN: 'token',
+    DOCUMENT_OCR_PROVIDER: 'openai',
+    OPENAI_API_KEY: 'sk-test-key',
+  });
+
+  assert.equal(config.documentOcrProvider, 'openai');
+  assert.equal(config.documentOcrModel, 'gpt-5.6-luna');
+  assert.equal(config.openAiApiKey, 'sk-test-key');
+  assert.equal(parseOcrProvider('OpenAI'), 'openai');
+});
+
+// Without this the server boots happily and every scanned document fails later with a 502 that
+// looks like an OpenAI outage rather than a missing setting.
+test('loadConfig refuses to boot when openai OCR is enabled without a key', () => {
   assert.throws(
     () => loadConfig({
       LEGALSERVER_BASE_URL: 'https://example.legalserver.org/',
       LEGALSERVER_BEARER_TOKEN: 'token',
       DOCUMENT_OCR_PROVIDER: 'openai',
-      OPENAI_API_KEY: 'sk-test-key',
     }),
-    /DOCUMENT_OCR_PROVIDER=openai is not supported in this release/,
+    /OPENAI_API_KEY environment variable is required when DOCUMENT_OCR_PROVIDER=openai/,
   );
+});
 
-  assert.throws(() => parseOcrProvider('openai'), /not supported in this release/);
+test('DOCUMENT_OCR_MAX_PAGES defaults to 50 and rejects nonsense', () => {
+  const base = {
+    LEGALSERVER_BASE_URL: 'https://example.legalserver.org/',
+    LEGALSERVER_BEARER_TOKEN: 'token',
+  };
+
+  assert.equal(loadConfig(base).documentOcrMaxPages, 50);
+  assert.equal(loadConfig({ ...base, DOCUMENT_OCR_MAX_PAGES: '12' }).documentOcrMaxPages, 12);
+  assert.throws(() => loadConfig({ ...base, DOCUMENT_OCR_MAX_PAGES: '0' }), /at least 1/);
+  assert.throws(() => loadConfig({ ...base, DOCUMENT_OCR_MAX_PAGES: '-3' }), /non-negative integer/);
 });
 
 // An existing deployment may still carry one of these in its .env. Failing at boot with a

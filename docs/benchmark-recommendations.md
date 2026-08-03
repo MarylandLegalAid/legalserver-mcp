@@ -76,7 +76,7 @@ They depend on:
 
 That is not what the Reports API is for. Reports can replace row retrieval, not document extraction workflows.
 
-The benchmark's scanned manifest scenarios failed because the OCR path could not complete. That has since been resolved as a scope decision rather than a defect: OCR is not supported in this release and is deferred to a future one (see "OCR Is Not Supported Yet" in `README.md`). Read the scanned-document rows below as measuring an unimplemented feature, not a broken environment.
+The benchmark's scanned manifest scenarios failed because the OCR path could not complete. Those numbers are now stale in both directions: OCR was unimplemented when they were recorded (the PDF path sent single-page PDFs to an API expecting raster images), and it has since been implemented on top of `pdftoppm` rasterization with an opt-in OpenAI provider (see "OCR" in `README.md`). Read the scanned-document rows below as measuring neither a broken environment nor the current code, and re-run them against a deployment with `DOCUMENT_OCR_PROVIDER=openai` before drawing conclusions.
 
 ## Practical Recommendation
 
@@ -104,7 +104,7 @@ When building the reports, keep them narrow and purpose-built.
 
 The benchmark also surfaced a few environment issues that should be fixed separately:
 
-- ~~scanned-document OCR failed in this environment~~ — closed: OCR is deliberately unsupported in this release, so this is expected rather than an environment issue to fix
+- ~~scanned-document OCR failed in this environment~~ — closed: it was an unimplemented feature, not an environment issue. OCR now ships as an opt-in OpenAI provider; these scenarios need re-running to produce meaningful numbers
 - `user_list_current_user_supervisors` returned `unauthorized`
 - `matter_search_document_text` returned `invalid_request` for the chosen fixture/query combination
 - `matter_list_related_matters` returned `not_found` for the benchmark fixture matter
