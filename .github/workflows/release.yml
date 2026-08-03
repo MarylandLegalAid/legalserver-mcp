@@ -43,6 +43,11 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      # pdftoppm rasterizes scanned PDF pages for OCR. The rasterization tests skip
+      # themselves when it is missing, so install it here to make sure they actually run.
+      - name: Install poppler-utils
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends poppler-utils
+
       # Gate the publish on the tests. An image is immutable once pushed and the
       # deployment pins it by tag, so a broken build is not something a later
       # commit quietly fixes — it needs a new version and a new tag.

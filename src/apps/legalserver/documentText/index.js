@@ -1,10 +1,13 @@
 const crypto = require('node:crypto');
+const { spawn } = require('node:child_process');
 const {
   DOCUMENT_CHUNK_BOUNDARY_LOOKBACK_CHARS,
   DOCUMENT_CHUNK_OVERLAP_CHARS,
   DOCUMENT_CHUNK_TARGET_CHARS,
   DOCUMENT_SEARCH_SNIPPET_MAX_CHARS,
   PDF_EMBEDDED_TEXT_MIN_CHARS,
+  PDF_RASTER_DPI,
+  PDF_RASTER_PAGE_TIMEOUT_MS,
 } = require('../constants');
 const { ToolError } = require('../helpers');
 const {
@@ -713,20 +716,108 @@ async function extractPdfTextPages(buffer) {
   return pageTexts.length > 0 ? pageTexts : [''];
 }
 
-async function splitPdfIntoSinglePageBuffers(buffer) {
+// Renders one PDF page to PNG with poppler's pdftoppm. The PDF goes in on stdin and the
+// PNG comes back on stdout, so no part of a client document is ever written to disk.
+function rasterizePdfPageToPng({ buffer, pageNumber, dpi, timeoutMs }) {
+  return new Promise((resolve, reject) => {
+    const child = spawn('pdftoppm', [
+      '-png',
+      '-r', String(dpi),
+      '-f', String(pageNumber),
+      '-l', String(pageNumber),
+      '-',
+    ]);
+
+    const stdoutChunks = [];
+    const stderrChunks = [];
+    let settled = false;
+
+    const finish = (error, value) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearTimeout(timer);
+      if (error) {
+        reject(error);
+        return;
+      }
+      resolve(value);
+    };
+
+    const timer = setTimeout(() => {
+      child.kill('SIGKILL');
+      finish(new Error(`pdftoppm timed out after ${timeoutMs}ms on page ${pageNumber}`));
+    }, timeoutMs);
+
+    child.stdout.on('data', (chunk) => stdoutChunks.push(chunk));
+    child.stderr.on('data', (chunk) => stderrChunks.push(chunk));
+
+    child.on('error', (error) => {
+      finish(error.code === 'ENOENT'
+        ? new Error('pdftoppm is not installed. PDF page rasterization requires poppler-utils.')
+        : error);
+    });
+
+    child.on('close', (code) => {
+      if (code !== 0) {
+        finish(new Error(
+          `pdftoppm exited with code ${code} on page ${pageNumber}: `
+          + `${Buffer.concat(stderrChunks).toString('utf8').trim().slice(0, 200)}`,
+        ));
+        return;
+      }
+
+      const png = Buffer.concat(stdoutChunks);
+      if (png.length === 0) {
+        finish(new Error(`pdftoppm produced no image data for page ${pageNumber}`));
+        return;
+      }
+
+      finish(null, png);
+    });
+
+    // EPIPE is expected if pdftoppm rejects the document and exits before reading all input;
+    // the non-zero exit code handled above is the meaningful error, so swallow it here.
+    child.stdin.on('error', () => {});
+    child.stdin.end(buffer);
+  });
+}
+
+// OCR providers need raster images, not PDFs, so every page is rendered to PNG here rather
+// than handed over as a single-page PDF.
+async function rasterizePdfIntoPageImages(buffer, options = {}) {
   const { PDFDocument } = require('pdf-lib');
-  const source = await PDFDocument.load(buffer);
+  const dpi = options.dpi || PDF_RASTER_DPI;
+  const timeoutMs = options.timeoutMs || PDF_RASTER_PAGE_TIMEOUT_MS;
+
+  let pageCount;
+  try {
+    pageCount = (await PDFDocument.load(buffer)).getPageCount();
+  } catch (error) {
+    throw new ToolError({
+      errorCode: 'extraction_failed',
+      message: `Could not read the page structure of this PDF: ${error instanceof Error ? error.message : String(error)}`,
+      status: 502,
+    });
+  }
+
   const pages = [];
 
-  for (let index = 0; index < source.getPageCount(); index += 1) {
-    const pdf = await PDFDocument.create();
-    const [page] = await pdf.copyPages(source, [index]);
-    pdf.addPage(page);
-    pages.push({
-      pageNumber: index + 1,
-      mimeType: 'application/pdf',
-      bytes: Buffer.from(await pdf.save()),
-    });
+  for (let pageNumber = 1; pageNumber <= pageCount; pageNumber += 1) {
+    try {
+      pages.push({
+        pageNumber,
+        mimeType: 'image/png',
+        bytes: await rasterizePdfPageToPng({ buffer, pageNumber, dpi, timeoutMs }),
+      });
+    } catch (error) {
+      throw new ToolError({
+        errorCode: 'extraction_failed',
+        message: `Could not rasterize page ${pageNumber} for OCR: ${error instanceof Error ? error.message : String(error)}`,
+        status: 502,
+      });
+    }
   }
 
   return pages;
@@ -756,7 +847,7 @@ class DocumentTextPipeline {
       extractEmailTextPages,
       extractPdfTextPages,
       extractRtfTextPages,
-      splitPdfIntoSinglePageBuffers,
+      rasterizePdfIntoPageImages,
       ...(extractors || {}),
     };
     this.cache = new Map();
@@ -862,7 +953,11 @@ class DocumentTextPipeline {
         };
       }
 
-      const ocrPages = await this.extractWithOcr(await this.extractors.splitPdfIntoSinglePageBuffers(buffer));
+      // Checked before rasterizing: with no provider configured this document is going to fail
+      // anyway, and rendering every page first would burn a pdftoppm process per page for nothing.
+      this.ensureOcrAvailable();
+
+      const ocrPages = await this.extractWithOcr(await this.extractors.rasterizePdfIntoPageImages(buffer));
       return {
         pageTexts: ocrPages,
         textSource: 'pdf_ocr',
@@ -891,7 +986,7 @@ class DocumentTextPipeline {
     });
   }
 
-  async extractWithOcr(pages) {
+  ensureOcrAvailable() {
     if (!this.ocrProvider) {
       throw new ToolError({
         errorCode: 'ocr_unavailable',
@@ -899,6 +994,10 @@ class DocumentTextPipeline {
         status: 412,
       });
     }
+  }
+
+  async extractWithOcr(pages) {
+    this.ensureOcrAvailable();
 
     const results = await this.ocrProvider.extractPages(pages);
     return results.map((page) => page.text || '');
@@ -927,4 +1026,5 @@ module.exports = {
   locatePageRange,
   normalizeDocumentPages,
   normalizePageText,
+  rasterizePdfIntoPageImages,
 };

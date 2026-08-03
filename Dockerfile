@@ -1,5 +1,10 @@
 FROM node:20-bookworm-slim
 
+# poppler-utils provides pdftoppm, used to rasterize scanned PDF pages to PNG for OCR.
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends poppler-utils \
+  && rm -rf /var/lib/apt/lists/*
+
 WORKDIR /app
 
 COPY package.json package-lock.json ./

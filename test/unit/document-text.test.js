@@ -15,7 +15,7 @@ function createPipeline(overrides = {}) {
     email: 0,
     pdf: 0,
     rtf: 0,
-    splitPdf: 0,
+    rasterizePdf: 0,
   };
   const client = {
     async downloadDocumentBinary(documentRecord) {
@@ -36,7 +36,7 @@ function createPipeline(overrides = {}) {
   };
   const config = {
     documentOcrProvider: overrides.documentOcrProvider || 'none',
-    documentOcrModel: 'gemini-2.5-flash',
+    documentOcrModel: 'gpt-5.6-luna',
   };
   const defaultExtractors = overrides.useRealTextExtractors ? {} : {
     async extractDocxText() {
@@ -55,11 +55,11 @@ function createPipeline(overrides = {}) {
       extractorCalls.rtf += 1;
       return [buffer.toString('utf8')];
     },
-    async splitPdfIntoSinglePageBuffers() {
-      extractorCalls.splitPdf += 1;
+    async rasterizePdfIntoPageImages() {
+      extractorCalls.rasterizePdf += 1;
       return [
-        { pageNumber: 1, mimeType: 'application/pdf', bytes: Buffer.from('page-1') },
-        { pageNumber: 2, mimeType: 'application/pdf', bytes: Buffer.from('page-2') },
+        { pageNumber: 1, mimeType: 'image/png', bytes: Buffer.from('page-1') },
+        { pageNumber: 2, mimeType: 'image/png', bytes: Buffer.from('page-2') },
       ];
     },
   };
@@ -147,7 +147,7 @@ test('pipeline caches extraction results for repeated calls in one process', asy
     internal_id: 500,
     download_url: 'https://example.legalserver.org/modules/document/download.php?id=500',
   });
-  assert.deepEqual(extractorCalls, { docx: 0, email: 0, pdf: 0, rtf: 0, splitPdf: 0 });
+  assert.deepEqual(extractorCalls, { docx: 0, email: 0, pdf: 0, rtf: 0, rasterizePdf: 0 });
 });
 
 test('pipeline extracts documents successfully with identifiers only and no download_url', async () => {
@@ -334,14 +334,14 @@ test('pipeline keeps digital PDFs on embedded text and skips OCR', async () => {
 
   assert.equal(state.textSource, 'pdf_text');
   assert.equal(extractorCalls.pdf, 1);
-  assert.equal(extractorCalls.splitPdf, 0);
+  assert.equal(extractorCalls.rasterizePdf, 0);
 });
 
 test('pipeline falls back to OCR for scanned PDFs and records OCR metadata', async () => {
   const ocrCalls = [];
   const { pipeline, extractorCalls } = createPipeline({
     contentType: 'application/pdf',
-    documentOcrProvider: 'vertex_gemini',
+    documentOcrProvider: 'openai',
     pdfPages: ['too short'],
     ocrProvider: {
       async extractPages(pages) {
@@ -365,15 +365,15 @@ test('pipeline falls back to OCR for scanned PDFs and records OCR metadata', asy
   });
 
   assert.equal(state.textSource, 'pdf_ocr');
-  assert.equal(state.ocrProvider, 'vertex_gemini');
-  assert.equal(extractorCalls.splitPdf, 1);
+  assert.equal(state.ocrProvider, 'openai');
+  assert.equal(extractorCalls.rasterizePdf, 1);
   assert.deepEqual(ocrCalls, [1, 2]);
 });
 
 test('pipeline OCRs supported images', async () => {
   const { pipeline } = createPipeline({
     contentType: 'image/png',
-    documentOcrProvider: 'vertex_gemini',
+    documentOcrProvider: 'openai',
     ocrProvider: {
       async extractPages() {
         return [{ pageNumber: 1, text: 'Image OCR text' }];
@@ -451,7 +451,7 @@ test('pipeline fails explicitly when OCR is required but unavailable', async () 
 test('pipeline surfaces extraction failures from the OCR provider', async () => {
   const { pipeline } = createPipeline({
     contentType: 'image/webp',
-    documentOcrProvider: 'vertex_gemini',
+    documentOcrProvider: 'openai',
     ocrProvider: {
       async extractPages() {
         throw new ToolError({
