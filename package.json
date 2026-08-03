@@ -1,6 +1,6 @@
 {
   "name": "legalserver-mcp",
-  "version": "3.0.0",
+  "version": "3.1.0",
   "description": "Streamable HTTP MCP service exposing read-only LegalServer matter, document, and discovery tools",
   "main": "index.js",
   "scripts": {

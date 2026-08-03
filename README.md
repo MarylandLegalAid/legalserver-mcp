@@ -4,7 +4,7 @@
 
 This is developed and run in production by [Maryland Legal Aid](https://www.mdlab.org/); it's open sourced because other legal aid organizations and LegalServer customers may find it useful too. Org-specific customizations (branding, document generation on your own letterhead, etc.) are expected to live in your own private deployment, layered on top as separate MCP services — not in this repo.
 
-Version: `3.0.0`
+Version: `3.1.0`
 
 ## Requirements
 
