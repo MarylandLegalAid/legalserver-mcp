@@ -19,7 +19,11 @@ const DOCUMENT_CHUNK_TARGET_CHARS = 4000;
 const DOCUMENT_CHUNK_OVERLAP_CHARS = 400;
 const DOCUMENT_CHUNK_BOUNDARY_LOOKBACK_CHARS = 500;
 const DOCUMENT_SEARCH_SNIPPET_MAX_CHARS = 600;
-const PDF_EMBEDDED_TEXT_MIN_CHARS = 100;
+// Per page, not per document. A scanned page yields roughly nothing (or a few characters of
+// scanner-OCR noise); a real text page yields hundreds. Set low so that a sparse but genuine
+// text page is not re-OCR'd — the tradeoff is that a truly blank separator page in a digital
+// PDF costs one wasted call that returns nothing.
+const PDF_PAGE_TEXT_MIN_CHARS = 20;
 const CHAT_VISION_OCR_TIMEOUT_MS = 60000;
 const PDF_RASTER_DPI = 300;
 const PDF_RASTER_PAGE_TIMEOUT_MS = 30000;
@@ -121,7 +125,7 @@ module.exports = {
   CHAT_VISION_OCR_TIMEOUT_MS,
   DEFAULT_DOCUMENT_OCR_MAX_PAGES,
   OPENAI_CHAT_COMPLETIONS_URL,
-  PDF_EMBEDDED_TEXT_MIN_CHARS,
+  PDF_PAGE_TEXT_MIN_CHARS,
   PDF_RASTER_DPI,
   PDF_RASTER_PAGE_TIMEOUT_MS,
   PREVIEW_MAX_CHARS,

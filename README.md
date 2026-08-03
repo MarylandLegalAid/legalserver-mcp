@@ -94,7 +94,7 @@ DOCUMENT_OCR_MODEL=gpt-5.6-luna   # optional; this is the default
 DOCUMENT_OCR_MAX_PAGES=50         # optional; this is the default
 ```
 
-Scanned PDF pages are rendered to PNG with `pdftoppm` at 300 DPI, one image per page, and each page is sent to OpenAI's chat completions API as a base64 `image_url` part. Requests go to `api.openai.com` directly and are never proxied. `DOCUMENT_OCR_MODEL` accepts any vision-capable OpenAI model; keep the full `gpt-5.6-luna` slug rather than the bare `gpt-5.6` alias, which routes to a different tier.
+Scanned PDF pages are rendered to PNG with `pdftoppm` at 300 DPI, one image per page, and each page is sent to OpenAI's chat completions API as a base64 `image_url` part. The scanned/digital decision is made **per page**, so a 40-page filing with 5 scanned exhibits costs 5 API calls, not 40. Requests go to `api.openai.com` directly and are never proxied. `DOCUMENT_OCR_MODEL` accepts any vision-capable OpenAI model; keep the full `gpt-5.6-luna` slug rather than the bare `gpt-5.6` alias, which routes to a different tier.
 
 `DOCUMENT_OCR_MAX_PAGES` (default `50`) bounds a single document. Each page is its own API call, so an uncapped 500-page scan is 500 sequential requests. Documents over the cap fail with `document_too_large` (`413`) before anything is rendered or sent, rather than returning a truncated transcription that looks complete.
 
@@ -234,10 +234,16 @@ Extraction rules:
 - DOCX: `mammoth.extractRawText`
 - RTF: in-process plain-text conversion with paragraph preservation where possible
 - EML: RFC822-style header/body extraction, `text/plain` preferred, HTML converted to plain text
-- PDF: embedded text first; a PDF whose normalized embedded text is under `100` non-whitespace chars is treated as scanned and falls back to OCR
+- PDF: **per page** — any page whose normalized embedded text is under `20` non-whitespace chars is treated as scanned and sent to OCR; pages with a real text layer are never rasterized or sent
 - Images: PNG, JPEG, and WebP go straight to OCR
-- Max OCR pages per document: `DOCUMENT_OCR_MAX_PAGES` (default `50`), else `document_too_large`
+- Max OCR pages per document: `DOCUMENT_OCR_MAX_PAGES` (default `50`) counts only the pages needing OCR, else `document_too_large`
 - Max document size: `50 MB`
+
+`document_get_text_manifest` reports which pages went through OCR and which came back without text:
+
+- `text_source`: `pdf_text` (no OCR needed), `pdf_ocr` (every page scanned), or `pdf_text_with_ocr` (a mix)
+- `ocr_page_numbers`: the pages that were OCR'd
+- `pages_missing_text`: pages with no extractable text that were **not** OCR'd — non-empty only when OCR is disabled and the document is a mix. **A search that finds nothing in such a document is not evidence the term is absent.** Read this field before treating a document search as conclusive.
 
 The server caches canonical text, chunk metadata, page offsets, and a SHA-256 text hash in memory for the lifetime of the process. It never caches raw document bytes.
 

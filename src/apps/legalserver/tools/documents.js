@@ -63,6 +63,10 @@ function buildManifestData({ caseUuid, metadata, state }) {
     text_source: state.textSource,
     ocr_provider: state.ocrProvider,
     ocr_model: state.ocrModel,
+    ocr_page_numbers: state.ocrPageNumbers ?? [],
+    // Pages with no extractable text that were not OCR'd. Non-empty means this document's text
+    // has holes, so a search that finds nothing is not evidence the term is absent.
+    pages_missing_text: state.pagesMissingText ?? [],
     page_count: state.pageCount,
     total_text_chars: state.totalTextChars,
     estimated_tokens: state.estimatedTokens,

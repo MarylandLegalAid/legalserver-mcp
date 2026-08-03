@@ -6,7 +6,7 @@ const {
   DOCUMENT_CHUNK_TARGET_CHARS,
   DOCUMENT_SEARCH_SNIPPET_MAX_CHARS,
   DEFAULT_DOCUMENT_OCR_MAX_PAGES,
-  PDF_EMBEDDED_TEXT_MIN_CHARS,
+  PDF_PAGE_TEXT_MIN_CHARS,
   PDF_RASTER_DPI,
   PDF_RASTER_PAGE_TIMEOUT_MS,
 } = require('../constants');
@@ -803,9 +803,15 @@ async function rasterizePdfIntoPageImages(buffer, options = {}) {
     });
   }
 
+  // Only the requested pages are rendered. A PDF that mixes typed pages with scanned exhibits
+  // needs OCR for the exhibits alone, and rendering the rest would be paid-for waste.
+  const requested = Array.isArray(options.pageNumbers) && options.pageNumbers.length > 0
+    ? options.pageNumbers.filter((pageNumber) => pageNumber >= 1 && pageNumber <= pageCount)
+    : Array.from({ length: pageCount }, (_, index) => index + 1);
+
   const pages = [];
 
-  for (let pageNumber = 1; pageNumber <= pageCount; pageNumber += 1) {
+  for (const pageNumber of requested) {
     try {
       pages.push({
         pageNumber,
@@ -899,6 +905,10 @@ class DocumentTextPipeline {
       })),
       ocrModel: extracted.ocrUsed ? this.config.documentOcrModel : null,
       ocrProvider: extracted.ocrUsed ? this.config.documentOcrProvider : null,
+      ocrPageNumbers: extracted.ocrPageNumbers ?? (extracted.ocrUsed ? normalized.pageOffsets.map((page) => page.pageNumber) : []),
+      // Pages with no embedded text that were not OCR'd. Non-empty means the extracted text has
+      // holes in it, which callers must be able to see rather than infer from a short result.
+      pagesMissingText: extracted.pagesMissingText ?? [],
       pageCount: normalized.pageOffsets.length,
       pageOffsets: normalized.pageOffsets,
       textSha256: sha256(normalized.text),
@@ -942,31 +952,7 @@ class DocumentTextPipeline {
     }
 
     if (format === 'pdf') {
-      const embeddedPages = await this.extractors.extractPdfTextPages(buffer);
-      const embeddedNormalized = normalizeDocumentPages(embeddedPages);
-      const embeddedTextLength = embeddedNormalized.text.replace(/\s/g, '').length;
-
-      if (embeddedTextLength >= PDF_EMBEDDED_TEXT_MIN_CHARS) {
-        return {
-          pageTexts: embeddedPages,
-          textSource: 'pdf_text',
-          ocrUsed: false,
-        };
-      }
-
-      // Both checks run before rasterizing. This document is going to fail either way, and
-      // rendering every page first would burn a pdftoppm process per page for nothing.
-      // embeddedPages is one entry per page even when a scan yields no text, so it is a usable
-      // page count without loading the PDF a second time.
-      this.ensureOcrAvailable();
-      this.ensureOcrPageBudget(embeddedPages.length);
-
-      const ocrPages = await this.extractWithOcr(await this.extractors.rasterizePdfIntoPageImages(buffer));
-      return {
-        pageTexts: ocrPages,
-        textSource: 'pdf_ocr',
-        ocrUsed: true,
-      };
+      return this.extractPdf(buffer);
     }
 
     if (format === 'image/png' || format === 'image/jpeg' || format === 'image/webp') {
@@ -1000,6 +986,75 @@ class DocumentTextPipeline {
         status: 412,
       });
     }
+  }
+
+  // OCR is decided per page, not per document. Legal filings routinely mix typed pages with
+  // scanned exhibits, and a whole-document threshold gets those documents wrong in both
+  // directions: it either OCRs 40 pages when 5 needed it, or — the older bug — sees enough text
+  // from the typed pages to call the whole thing digital and silently returns the exhibits blank.
+  async extractPdf(buffer) {
+    const embeddedPages = await this.extractors.extractPdfTextPages(buffer);
+    const pageNeedsOcr = embeddedPages.map(
+      (pageText) => normalizePageText(pageText).replace(/\s/g, '').length < PDF_PAGE_TEXT_MIN_CHARS,
+    );
+    const ocrPageNumbers = pageNeedsOcr
+      .map((needsOcr, index) => (needsOcr ? index + 1 : null))
+      .filter((pageNumber) => pageNumber !== null);
+
+    if (ocrPageNumbers.length === 0) {
+      return {
+        pageTexts: embeddedPages,
+        textSource: 'pdf_text',
+        ocrUsed: false,
+        ocrPageNumbers: [],
+        pagesMissingText: [],
+      };
+    }
+
+    const everyPageNeedsOcr = ocrPageNumbers.length === embeddedPages.length;
+
+    if (!this.ocrProvider) {
+      // A fully scanned document has nothing to return, so it stays a hard failure that
+      // matter_search_document_text can skip. A mixed document does have usable text, and
+      // failing it outright would regress deployments that run with OCR off — so return what
+      // was extracted and report the gap instead of hiding it, which is what used to happen.
+      if (everyPageNeedsOcr) {
+        this.ensureOcrAvailable();
+      }
+
+      return {
+        pageTexts: embeddedPages,
+        textSource: 'pdf_text',
+        ocrUsed: false,
+        ocrPageNumbers: [],
+        pagesMissingText: ocrPageNumbers,
+      };
+    }
+
+    // Budget and rasterize only the pages that actually need it.
+    this.ensureOcrPageBudget(ocrPageNumbers.length);
+
+    const pageImages = await this.extractors.rasterizePdfIntoPageImages(buffer, {
+      pageNumbers: ocrPageNumbers,
+    });
+    const ocrTexts = await this.extractWithOcr(pageImages);
+    const ocrByPageNumber = new Map(
+      pageImages.map((page, index) => [page.pageNumber, ocrTexts[index] ?? '']),
+    );
+
+    // Sized to the union rather than to embeddedPages: if the rasterizer and the text extractor
+    // ever disagree on page count, dropping the overflow would silently lose transcribed text.
+    const totalPages = Math.max(embeddedPages.length, ...pageImages.map((page) => page.pageNumber));
+
+    return {
+      pageTexts: Array.from({ length: totalPages }, (_, index) => (
+        ocrByPageNumber.has(index + 1) ? ocrByPageNumber.get(index + 1) : (embeddedPages[index] ?? '')
+      )),
+      textSource: everyPageNeedsOcr ? 'pdf_ocr' : 'pdf_text_with_ocr',
+      ocrUsed: true,
+      ocrPageNumbers,
+      pagesMissingText: [],
+    };
   }
 
   // Each page is a separate vision API call, so an unbounded document is a cost, latency, and

@@ -278,3 +278,21 @@ test('scanned PDF flows through rasterization into the OpenAI provider as PNG', 
     assert.equal(body.store, false);
   }
 });
+
+// Mixed documents ask for a subset of pages. Rendering the rest would be wasted work on the
+// exact documents this optimization exists to make cheap.
+test('rasterizePdfIntoPageImages renders only the requested pages', { skip: skipWithoutPdftoppm }, async () => {
+  const pdf = await createPdf(['ALPHA', 'BRAVO', 'CHARLIE', 'DELTA']);
+
+  const pages = await rasterizePdfIntoPageImages(pdf, { dpi: 72, pageNumbers: [2, 4] });
+
+  assert.deepEqual(pages.map((page) => page.pageNumber), [2, 4]);
+  for (const page of pages) {
+    assert.equal(page.mimeType, 'image/png');
+    assert.ok(page.bytes.subarray(0, 8).equals(PNG_MAGIC));
+  }
+
+  // Out-of-range requests are dropped rather than crashing on a page that does not exist.
+  const clamped = await rasterizePdfIntoPageImages(pdf, { dpi: 72, pageNumbers: [3, 99] });
+  assert.deepEqual(clamped.map((page) => page.pageNumber), [3]);
+});
