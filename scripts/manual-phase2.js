@@ -46,9 +46,7 @@ Environment:
   LEGALSERVER_TIMEOUT_MS
   DOCUMENT_OCR_PROVIDER
   DOCUMENT_OCR_MODEL
-  GOOGLE_CLOUD_PROJECT
-  GOOGLE_CLOUD_LOCATION
-  GOOGLE_APPLICATION_CREDENTIALS
+  OPENAI_API_KEY
 
 Examples:
   npm run manual:phase2 -- --case_uuid matter-uuid --document_uuid doc-uuid --query rent

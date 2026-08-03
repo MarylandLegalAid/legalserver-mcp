@@ -9,6 +9,7 @@ Version: `3.0.0`
 ## Requirements
 
 - Node `20+`
+- `poppler-utils` (provides `pdftoppm`) — only needed for OCR, which is not supported yet; the container image installs it
 - `LEGALSERVER_BASE_URL`
 - `LEGALSERVER_BEARER_TOKEN`
 - Optional: `LEGALSERVER_TIMEOUT_MS` (default `30000`)
@@ -66,11 +67,7 @@ MATTER_CURRENT_USER_CACHE_TTL_MS=60000
 MATTER_CURRENT_USER_FETCH_CONCURRENCY=4
 # Reserved for a future release. OCR is not supported yet — leave these as-is.
 DOCUMENT_OCR_PROVIDER=none
-DOCUMENT_OCR_MODEL=gemini-2.5-flash
-GOOGLE_CLOUD_PROJECT=
-GOOGLE_CLOUD_LOCATION=global
-GOOGLE_APPLICATION_CREDENTIALS=
-OPENROUTER_API_KEY=
+DOCUMENT_OCR_MODEL=gpt-5.6-luna
 OPENAI_API_KEY=
 ```
 
@@ -87,9 +84,27 @@ Documents that would require OCR fail cleanly rather than silently returning emp
 
 One consequence worth knowing: `matter_search_document_text` treats `ocr_unavailable` as a skippable per-document error, so a matter-wide search across scanned documents succeeds while quietly omitting them. The skipped documents are listed in `warnings` — read that field before treating a matter-wide search as exhaustive.
 
-The repo carries unreleased provider scaffolding behind `DOCUMENT_OCR_PROVIDER` (`vertex_gemini`, `openrouter`, `openai`) and the matching env vars. That code is not run in production and is not covered end to end by tests, so the server **refuses to start** if `DOCUMENT_OCR_PROVIDER` is set to anything other than `none` — a misconfiguration fails loudly at boot rather than half-working at request time. Treat `DOCUMENT_OCR_MODEL`, `GOOGLE_CLOUD_PROJECT`, `GOOGLE_CLOUD_LOCATION`, `GOOGLE_APPLICATION_CREDENTIALS`, `OPENROUTER_API_KEY`, and `OPENAI_API_KEY` as reserved.
+The repo carries unreleased OpenAI provider scaffolding behind `DOCUMENT_OCR_PROVIDER=openai`. That code is not run in production and is not covered end to end by tests, so the server **refuses to start** if `DOCUMENT_OCR_PROVIDER` is set to anything other than `none` — a misconfiguration fails loudly at boot rather than half-working at request time. Treat `DOCUMENT_OCR_MODEL` and `OPENAI_API_KEY` as reserved.
 
-Known gap for anyone picking this work up later: `splitPdfIntoSinglePageBuffers` emits one single-page **PDF** per page and the providers send it as a `data:application/pdf` URI, but the OpenAI-compatible `image_url` content part is specified for raster images. A rasterization step (for example `pdftoppm` at 300 DPI) is therefore a prerequisite for any working OCR provider, cloud or local — the provider classes alone are not sufficient.
+### When OCR ships, Zero Data Retention is your responsibility
+
+Enabling OCR will not be purely a configuration change, so it is worth understanding the data-handling model **before** you plan for it.
+
+OCR works by sending page images of scanned client documents to a cloud vision model. For legal aid work those pages routinely contain client names, addresses, immigration status, medical details, and financial information. Three separate controls govern what happens to them, and **this server can only enforce two**:
+
+| What it protects against | Mechanism | Enforced by |
+| --- | --- | --- |
+| The page becoming a retrievable stored object (dashboard logs, API-side conversation state, evals) | `store: false` on every request | this server, unconditionally |
+| A third party seeing the page en route | Requests go directly to `api.openai.com`, never through a proxy or router | this server |
+| The page being retained at all, including for abuse monitoring | A **Zero Data Retention (ZDR)** agreement on your own OpenAI account | **you, the operator** |
+
+The third row is the one that actually keeps scanned client documents out of a vendor's retention window, and **no setting in this repository can provide it**. `store: false` is not zero retention: it stops the request being kept as something anyone can pull back up, but on a standard account the payload is still retained for OpenAI's abuse-monitoring window. Only a ZDR agreement negotiated on your account changes that.
+
+If you are handling privileged or otherwise confidential client material, arrange ZDR (and, where applicable, a BAA) with OpenAI **before** you enable OCR — not after. If you cannot, leave `DOCUMENT_OCR_PROVIDER=none`; failing on scanned documents is the safer outcome.
+
+This is also why OpenAI is the only OCR vendor this server will support. Earlier revisions carried `openrouter` and `vertex_gemini` providers; both have been removed. A router proxies page images to whichever model you name, which puts them outside an agreement scoped to a single vendor — and a one-word change in an `.env` file is too small a gap between a compliant deployment and a non-compliant one. Setting either value now fails at boot with a message saying so.
+
+One more thing to weigh: OCR text is transcribed verbatim and handed to the calling agent. A scanned page containing text that reads as instructions will be transcribed and enter the agent's context as content. This is already true of DOCX and PDF text today, but OCR extends it to documents nobody has ever read as text.
 
 ## Tool Set
 
@@ -200,6 +215,8 @@ Extraction rules:
 - Max document size: `50 MB`
 
 The server caches canonical text, chunk metadata, page offsets, and a SHA-256 text hash in memory for the lifetime of the process. It never caches raw document bytes.
+
+When OCR ships, scanned PDF pages will be rendered to PNG with `pdftoppm` at 300 DPI, one image per page, so that page numbers on search hits stay accurate. The PDF is piped to `pdftoppm` on stdin and the image read back from stdout, so no part of a client document is written to disk.
 
 Phase 2.5 resolves document binaries from LegalServer document identifiers first:
 

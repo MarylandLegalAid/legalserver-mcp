@@ -86,15 +86,26 @@ function parseHttpPort(rawPort) {
 }
 
 // OCR is not supported in this release — see "OCR Is Not Supported Yet" in README.md.
-// The provider scaffolding in documentText/ocrProviders.js is kept but unreleased, so enabling
-// it is rejected at boot rather than allowed to half-work at request time.
-const UNRELEASED_OCR_PROVIDERS = new Set(['vertex_gemini', 'openrouter', 'openai']);
+// The OpenAI provider in documentText/ocrProviders.js is kept but unreleased, so enabling it is
+// rejected at boot rather than allowed to half-work at request time.
+const UNRELEASED_OCR_PROVIDERS = new Set(['openai']);
+
+// Removed outright: page images went to a third party, which puts them outside a data-handling
+// agreement scoped to a single vendor. OpenAI is the only OCR vendor this server will support.
+const REMOVED_OCR_PROVIDERS = new Set(['openrouter', 'vertex_gemini']);
 
 function parseOcrProvider(rawProvider) {
   const provider = (rawProvider || 'none').trim().toLowerCase();
 
   if (provider === 'none') {
     return provider;
+  }
+
+  if (REMOVED_OCR_PROVIDERS.has(provider)) {
+    throw new Error(
+      `DOCUMENT_OCR_PROVIDER=${provider} has been removed. OCR is supported through OpenAI only, `
+      + 'so that page images stay with one vendor; set DOCUMENT_OCR_PROVIDER=none.',
+    );
   }
 
   if (UNRELEASED_OCR_PROVIDERS.has(provider)) {
@@ -107,16 +118,9 @@ function parseOcrProvider(rawProvider) {
   throw new Error('DOCUMENT_OCR_PROVIDER must be none — OCR is not supported in this release');
 }
 
-// Only the `none` branch is reachable while OCR is unsupported; the rest is kept for revival.
-function defaultOcrModel(provider) {
-  if (provider === 'openrouter') {
-    return 'google/gemini-2.5-flash';
-  }
-  if (provider === 'openai') {
-    return 'gpt-5.6-luna';
-  }
-  return 'gemini-2.5-flash';
-}
+// Vision-capable OpenAI model used when DOCUMENT_OCR_MODEL is unset. Unused while OCR is
+// unsupported, but it is what documentOcrModel reports, so it should name a real model.
+const DEFAULT_OCR_MODEL = 'gpt-5.6-luna';
 
 function normalizeOptionalString(value) {
   if (value === undefined || value === null) {
@@ -169,11 +173,9 @@ function loadConfig(env) {
     throw new Error('LEGALSERVER_BEARER_TOKEN environment variable is required');
   }
 
-  // parseOcrProvider rejects every provider but `none`, so the per-provider credential checks
-  // that used to live here are unreachable. Restore them alongside the provider itself.
+  // parseOcrProvider rejects every provider but `none`, so the OPENAI_API_KEY presence check
+  // that belongs here is unreachable. Restore it alongside the provider itself.
   const documentOcrProvider = parseOcrProvider(env.DOCUMENT_OCR_PROVIDER);
-  const googleCloudProject = normalizeOptionalString(env.GOOGLE_CLOUD_PROJECT);
-  const openRouterApiKey = normalizeOptionalString(env.OPENROUTER_API_KEY);
   const openAiApiKey = normalizeOptionalString(env.OPENAI_API_KEY);
 
   return {
@@ -181,10 +183,7 @@ function loadConfig(env) {
     bearerToken,
     timeoutMs: parseTimeout(env.LEGALSERVER_TIMEOUT_MS),
     documentOcrProvider,
-    documentOcrModel: normalizeOptionalString(env.DOCUMENT_OCR_MODEL) || defaultOcrModel(documentOcrProvider),
-    googleCloudProject,
-    googleCloudLocation: normalizeOptionalString(env.GOOGLE_CLOUD_LOCATION) || 'global',
-    openRouterApiKey,
+    documentOcrModel: normalizeOptionalString(env.DOCUMENT_OCR_MODEL) || DEFAULT_OCR_MODEL,
     openAiApiKey,
     httpHost: normalizeOptionalString(env.MCP_HTTP_HOST) || '127.0.0.1',
     httpPort: parseHttpPort(env.PORT || env.MCP_HTTP_PORT),

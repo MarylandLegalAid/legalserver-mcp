@@ -114,8 +114,7 @@ test('OCR config defaults to none, the only supported value in this release', ()
   });
 
   assert.equal(config.documentOcrProvider, 'none');
-  assert.equal(config.documentOcrModel, 'gemini-2.5-flash');
-  assert.equal(config.googleCloudLocation, 'global');
+  assert.equal(config.documentOcrModel, 'gpt-5.6-luna');
 
   assert.equal(parseOcrProvider('none'), 'none');
   assert.equal(parseOcrProvider(undefined), 'none');
@@ -123,27 +122,52 @@ test('OCR config defaults to none, the only supported value in this release', ()
   assert.throws(() => parseOcrProvider('bad'), /DOCUMENT_OCR_PROVIDER/);
 });
 
-test('loadConfig refuses to boot when an unreleased OCR provider is enabled', () => {
-  // Credentials are supplied deliberately: enabling OCR must fail because the feature is
-  // unsupported, not merely because a key is missing.
-  const credentials = {
-    GOOGLE_CLOUD_PROJECT: 'proj-1',
-    OPENROUTER_API_KEY: 'sk-or-test-key',
-    OPENAI_API_KEY: 'sk-test-key',
-  };
+test('loadConfig refuses to boot when the unreleased OpenAI OCR provider is enabled', () => {
+  // The key is supplied deliberately: enabling OCR must fail because the feature is
+  // unsupported, not merely because a credential is missing.
+  assert.throws(
+    () => loadConfig({
+      LEGALSERVER_BASE_URL: 'https://example.legalserver.org/',
+      LEGALSERVER_BEARER_TOKEN: 'token',
+      DOCUMENT_OCR_PROVIDER: 'openai',
+      OPENAI_API_KEY: 'sk-test-key',
+    }),
+    /DOCUMENT_OCR_PROVIDER=openai is not supported in this release/,
+  );
 
-  for (const provider of ['vertex_gemini', 'openrouter', 'openai']) {
+  assert.throws(() => parseOcrProvider('openai'), /not supported in this release/);
+});
+
+// An existing deployment may still carry one of these in its .env. Failing at boot with a
+// message naming the removal beats silently ignoring the setting and sending nothing anywhere.
+test('loadConfig refuses to boot on a removed third-party OCR provider', () => {
+  for (const provider of ['openrouter', 'vertex_gemini']) {
     assert.throws(
       () => loadConfig({
         LEGALSERVER_BASE_URL: 'https://example.legalserver.org/',
         LEGALSERVER_BEARER_TOKEN: 'token',
         DOCUMENT_OCR_PROVIDER: provider,
-        ...credentials,
+        OPENROUTER_API_KEY: 'sk-or-test-key',
+        GOOGLE_CLOUD_PROJECT: 'proj-1',
       }),
-      new RegExp(`DOCUMENT_OCR_PROVIDER=${provider} is not supported in this release`),
+      new RegExp(`DOCUMENT_OCR_PROVIDER=${provider} has been removed`),
       `${provider} should be rejected at boot`,
     );
 
-    assert.throws(() => parseOcrProvider(provider), /not supported in this release/);
+    assert.throws(() => parseOcrProvider(provider), /has been removed/);
   }
+});
+
+test('loadConfig no longer surfaces credentials for the removed providers', () => {
+  const config = loadConfig({
+    LEGALSERVER_BASE_URL: 'https://example.legalserver.org/',
+    LEGALSERVER_BEARER_TOKEN: 'token',
+    OPENROUTER_API_KEY: 'sk-or-test-key',
+    GOOGLE_CLOUD_PROJECT: 'proj-1',
+    GOOGLE_CLOUD_LOCATION: 'us-central1',
+  });
+
+  assert.equal(config.openRouterApiKey, undefined);
+  assert.equal(config.googleCloudProject, undefined);
+  assert.equal(config.googleCloudLocation, undefined);
 });

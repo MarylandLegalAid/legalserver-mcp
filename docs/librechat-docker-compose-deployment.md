@@ -107,11 +107,7 @@ LEGALSERVER_USER_EMAIL_HEADER=x-legalserver-user-email
 
 # Reserved for a future release. OCR is not supported yet — leave these as-is.
 DOCUMENT_OCR_PROVIDER=none
-DOCUMENT_OCR_MODEL=gemini-2.5-flash
-GOOGLE_CLOUD_PROJECT=
-GOOGLE_CLOUD_LOCATION=global
-GOOGLE_APPLICATION_CREDENTIALS=
-OPENROUTER_API_KEY=
+DOCUMENT_OCR_MODEL=gpt-5.6-luna
 OPENAI_API_KEY=
 ```
 
@@ -123,7 +119,11 @@ Important notes:
 - `LEGALSERVER_USER_EMAIL_HEADER` is the header name the MCP will inspect for the current user email.
 - `MCP_HTTP_HOST=0.0.0.0` is correct inside the container.
 
-OCR is **not supported in this release** — it is a planned future feature. Leave `DOCUMENT_OCR_PROVIDER=none` and leave the other OCR variables blank; they are reserved. Scanned PDFs and image documents will fail with `error_code: "ocr_unavailable"` (`412`), and `matter_search_document_text` will skip them and list them in `warnings`. See the "OCR Is Not Supported Yet" section of `README.md` before promising OCR to your users.
+OCR is **not supported in this release** — it is a planned future feature. Leave `DOCUMENT_OCR_PROVIDER=none` and leave `OPENAI_API_KEY` blank; both are reserved. Scanned PDFs and image documents will fail with `error_code: "ocr_unavailable"` (`412`), and `matter_search_document_text` will skip them and list them in `warnings`. See the "OCR Is Not Supported Yet" section of `README.md` before promising OCR to your users.
+
+The `openrouter` and `vertex_gemini` providers that earlier revisions documented have been removed, and so have `OPENROUTER_API_KEY`, `GOOGLE_CLOUD_PROJECT`, `GOOGLE_CLOUD_LOCATION`, and `GOOGLE_APPLICATION_CREDENTIALS`. If your existing `.env` still sets `DOCUMENT_OCR_PROVIDER` to either provider, the container will now **fail at boot** with a message naming the removal. Set it to `none`.
+
+Plan ahead on one point: when OCR does ship, it sends page images of scanned client documents to OpenAI. The server will always send `store: false`, but that is not zero retention — that requires a **Zero Data Retention agreement on your own OpenAI account**, which nothing in this deployment can provide. Arrange it (and a BAA if you need one) *before* enabling OCR, not after. See "When OCR ships, Zero Data Retention is your responsibility" in `README.md`.
 
 ## Step 3: Add The MCP Service To Docker Compose
 
