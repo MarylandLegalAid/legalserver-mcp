@@ -1,4 +1,5 @@
 const {
+  DEFAULT_DOCUMENT_OCR_MAX_PAGES,
   DOCUMENT_CHUNK_OVERLAP_CHARS,
   DOCUMENT_CHUNK_TARGET_CHARS,
   MAX_PAGE_SIZE,
@@ -114,9 +115,34 @@ function buildSkippedDocumentLabel(metadata) {
   return `${identifier}: ${name}`;
 }
 
-function buildMatterSearchWarnings(skippedDocuments) {
+function buildOcrCandidate(metadata, ocrPageCount) {
+  return {
+    document_uuid: metadata.document_uuid,
+    document_id: metadata.document_id,
+    name: metadata.name,
+    title: metadata.title,
+    mime_type: metadata.mime_type,
+    date_updated: metadata.date_updated,
+    ocr_page_count: ocrPageCount,
+  };
+}
+
+function buildMatterSearchWarnings(skippedDocuments, documentsRequiringOcr = []) {
+  const warnings = [];
+
+  // Stated in prose as well as in meta, because a negative result from a search that skipped
+  // documents is not the same as the term being absent from the matter.
+  if (documentsRequiringOcr.length > 0) {
+    const pages = documentsRequiringOcr.reduce((total, candidate) => total + candidate.ocr_page_count, 0);
+    warnings.push(
+      `${documentsRequiringOcr.length} document(s) contain scanned pages that were not read `
+      + `(${pages} page(s) total). This search is not exhaustive. See meta.documents_requiring_ocr, `
+      + 'then re-run with include_scanned true or search those documents individually.',
+    );
+  }
+
   if (skippedDocuments.length === 0) {
-    return [];
+    return warnings;
   }
 
   const summaryByCode = new Map();
@@ -135,9 +161,7 @@ function buildMatterSearchWarnings(skippedDocuments) {
     summaryByCode.set(skipped.errorCode, current);
   }
 
-  const warnings = [
-    `Skipped ${skippedDocuments.length} documents during matter-wide search.`,
-  ];
+  warnings.push(`Skipped ${skippedDocuments.length} documents during matter-wide search.`);
 
   for (const errorCode of [...summaryByCode.keys()].sort()) {
     const summary = summaryByCode.get(errorCode);
@@ -362,7 +386,7 @@ function createDocumentTools() {
     },
     {
       name: 'matter_search_document_text',
-      description: 'Search canonical text across all matter documents in deterministic document order.',
+      description: 'Search extracted text across all documents on a matter. By default this does NOT read scanned pages: documents containing them are returned in meta.documents_requiring_ocr with names and page counts so you can decide which are worth reading. A result is only exhaustive when that list is empty.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -370,6 +394,21 @@ function createDocumentTools() {
           query: {
             type: 'string',
             description: 'Case-insensitive substring query, minimum 2 characters after trimming.',
+          },
+          include_scanned: {
+            type: 'boolean',
+            description: 'Default false. When false, scanned pages are NOT read and the documents '
+              + 'containing them are listed in meta.documents_requiring_ocr with their names, titles, '
+              + 'and OCR page counts — nothing is omitted silently. Review that list and set this to '
+              + 'true (or call document_search_text on the specific documents) when a scanned document '
+              + 'looks relevant. Reading scanned pages costs one AI vision call per page.',
+          },
+          ocr_page_budget: {
+            type: 'integer',
+            minimum: 1,
+            description: 'Only used when include_scanned is true. Caps how many scanned pages this '
+              + 'search will read in total. Documents that do not fit in what remains are left in '
+              + 'meta.documents_requiring_ocr rather than partially read.',
           },
           ...pageProperties(),
         },
@@ -389,16 +428,51 @@ function createDocumentTools() {
           await listMatterDocuments({ client, caseUuid }),
           helpers,
         );
+        const includeScanned = args.include_scanned === true;
+        const configuredBudget = documentTextPipeline.config?.documentOcrMaxPages
+          ?? DEFAULT_DOCUMENT_OCR_MAX_PAGES;
+        const requestedBudget = helpers.validatePositiveInteger(
+          args.ocr_page_budget,
+          configuredBudget,
+          'ocr_page_budget',
+        );
+
         const hits = [];
         const skippedDocuments = [];
+        const documentsRequiringOcr = [];
+        let ocrPagesRemaining = includeScanned ? requestedBudget : 0;
+        let ocrPagesUsed = 0;
 
         for (const record of records) {
           const metadata = mapDocumentRecord(record);
+
+          // An image is OCR-or-nothing and metadata alone says so, so when scanned pages are not
+          // wanted it can be reported without spending the download at all.
+          if (!includeScanned && metadata.text_strategy === 'ocr') {
+            documentsRequiringOcr.push(buildOcrCandidate(metadata, 1));
+            continue;
+          }
+
           try {
             const state = await documentTextPipeline.getDocumentState({
               caseUuid,
               documentRecord: record,
+              allowOcr: includeScanned,
+              ocrPageBudget: includeScanned ? ocrPagesRemaining : 0,
             });
+
+            const ocrPageNumbers = state.ocrPageNumbers ?? [];
+            const pagesMissingText = state.pagesMissingText ?? [];
+
+            ocrPagesUsed += ocrPageNumbers.length;
+            ocrPagesRemaining -= ocrPageNumbers.length;
+
+            // A mixed document contributes hits from the pages that were readable AND appears in
+            // the deferred list for the pages that were not.
+            if (pagesMissingText.length > 0) {
+              documentsRequiringOcr.push(buildOcrCandidate(metadata, pagesMissingText.length));
+            }
+
             const documentHits = buildSearchHits({
               text: state.canonicalText,
               pageOffsets: state.pageOffsets,
@@ -437,7 +511,15 @@ function createDocumentTools() {
           totalRecords: paged.totalRecords,
           totalPages: paged.totalPages,
           truncated: false,
-          warnings: buildMatterSearchWarnings(skippedDocuments),
+          warnings: buildMatterSearchWarnings(skippedDocuments, documentsRequiringOcr),
+          meta: {
+            include_scanned: includeScanned,
+            ocr_pages_used: ocrPagesUsed,
+            ocr_page_budget: includeScanned ? requestedBudget : 0,
+            // Documents whose scanned pages this search did not read. Empty means the search
+            // covered every readable document in the matter.
+            documents_requiring_ocr: documentsRequiringOcr,
+          },
         });
       },
     },

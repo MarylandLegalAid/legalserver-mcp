@@ -100,7 +100,28 @@ Scanned PDF pages are rendered to PNG with `pdftoppm` at 300 DPI, one image per 
 
 The server **refuses to start** if `DOCUMENT_OCR_PROVIDER=openai` without `OPENAI_API_KEY`, so a misconfiguration fails at boot rather than turning into a 502 on every scanned document later.
 
-One consequence worth knowing whether OCR is on or off: `matter_search_document_text` treats `ocr_unavailable`, `extraction_failed`, and `document_too_large` as skippable per-document errors, so a matter-wide search succeeds while quietly omitting the documents that hit them. The skipped documents are listed in `warnings` — read that field before treating a matter-wide search as exhaustive.
+### Matter-wide search does not OCR by default
+
+`matter_search_document_text` would otherwise be the one place cost runs away: it walks every document in the matter, so a matter holding ten 30-page scans would be 300 vision calls in a single tool call.
+
+Instead it searches everything readable without OCR and **reports what it did not read** rather than either spending on it or dropping it:
+
+```jsonc
+"meta": {
+  "include_scanned": false,
+  "ocr_pages_used": 0,
+  "documents_requiring_ocr": [
+    { "document_uuid": "...", "name": "Answer_to_Complaint.pdf", "ocr_page_count": 3 },
+    { "document_uuid": "...", "name": "Client_Photo_ID.jpg",     "ocr_page_count": 1 }
+  ]
+}
+```
+
+The calling agent already has those names and titles, so it can judge which scanned documents are worth reading — and because that judgement happens in the conversation rather than inside this server, it is visible and a user can override it. Follow up either with `include_scanned: true` (optionally with `ocr_page_budget`) or with `document_search_text` on the specific documents.
+
+Image documents are identified as needing OCR from metadata alone, so they cost not even a download. Mixed PDFs contribute hits from their typed pages *and* appear in `documents_requiring_ocr` for their scanned pages. A document that will not fit in the remaining budget is deferred whole rather than read halfway, so a partial read is never presented as a complete one.
+
+**A matter-wide search is exhaustive only when `documents_requiring_ocr` is empty.** A prose warning says so too. Documents that error are still summarized in `warnings`, since `ocr_unavailable`, `extraction_failed`, and `document_too_large` remain skippable per-document.
 
 ### Zero Data Retention is your responsibility
 

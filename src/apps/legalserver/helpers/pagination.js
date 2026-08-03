@@ -63,6 +63,7 @@ module.exports = {
   buildNextPage,
   paginateArray,
   validateMaxChars,
+  validatePositiveInteger,
   validatePage,
   validatePageSize,
 };

@@ -9,6 +9,7 @@ function successEnvelope({
   truncated = false,
   warnings = [],
   next,
+  meta,
 }) {
   const normalizedTotalRecords = totalRecords ?? (Array.isArray(data) ? data.length : data ? 1 : 0);
   const normalizedTotalPages = totalPages ?? (pageSize > 0 ? Math.ceil(normalizedTotalRecords / pageSize) : 0);
@@ -23,6 +24,8 @@ function successEnvelope({
     truncated,
     warnings,
     next: next === undefined ? buildNextPage(page, pageSize, normalizedTotalPages) : next,
+    // Omitted entirely unless a tool supplies it, so every other envelope is unchanged.
+    ...(meta === undefined ? {} : { meta }),
   };
 }
 

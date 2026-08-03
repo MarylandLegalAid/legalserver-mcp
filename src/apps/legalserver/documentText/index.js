@@ -860,24 +860,51 @@ class DocumentTextPipeline {
     this.cache = new Map();
   }
 
-  async getDocumentState({ caseUuid, documentRecord }) {
-    const cacheKey = getDocumentCacheKey(caseUuid, documentRecord);
-    const cached = this.cache.get(cacheKey);
-    if (cached) {
-      return cached;
+  // `allowOcr: false` extracts everything readable without spending a vision call, reporting the
+  // pages it declined to read in `pagesMissingText`. `ocrPageBudget` is a soft remaining-pages
+  // allowance for the caller's whole operation: a document needing more than is left is deferred
+  // the same way, rather than erroring, so one oversized document does not fail a matter search.
+  //
+  // Deferral is all-or-nothing per document, which is what makes the deferred result cacheable:
+  // it is always "everything extractable without OCR", independent of the budget that produced it.
+  async getDocumentState({ caseUuid, documentRecord, allowOcr = true, ocrPageBudget = null }) {
+    const completeKey = getDocumentCacheKey(caseUuid, documentRecord);
+    const deferredKey = `${completeKey}::no-ocr`;
+
+    // A complete state satisfies a deferred request too, so it is always preferred.
+    const cachedComplete = this.cache.get(completeKey);
+    if (cachedComplete) {
+      return cachedComplete;
     }
 
-    const pending = this.buildDocumentState({ documentRecord })
-      .catch((error) => {
-        this.cache.delete(cacheKey);
-        throw error;
-      });
+    if (allowOcr === false) {
+      const cachedDeferred = this.cache.get(deferredKey);
+      if (cachedDeferred) {
+        return cachedDeferred;
+      }
+    }
 
-    this.cache.set(cacheKey, pending);
-    return pending;
+    const pending = this.buildDocumentState({ documentRecord, allowOcr, ocrPageBudget });
+    // The key depends on what comes back, so park it under both and settle once it resolves.
+    // Raw document bytes are never cached, so a later OCR pass re-downloads by design.
+    const guarded = pending.catch((error) => {
+      this.cache.delete(completeKey);
+      this.cache.delete(deferredKey);
+      throw error;
+    });
+
+    this.cache.set(completeKey, guarded);
+
+    const state = await guarded;
+    if (state.pagesMissingText.length > 0) {
+      this.cache.delete(completeKey);
+      this.cache.set(deferredKey, Promise.resolve(state));
+    }
+
+    return state;
   }
 
-  async buildDocumentState({ documentRecord }) {
+  async buildDocumentState({ documentRecord, allowOcr = true, ocrPageBudget = null }) {
     const expectedSizeBytes = getDocumentSizeBytes(documentRecord);
     const download = await this.client.downloadDocumentBinary(documentRecord, {
       expectedSizeBytes,
@@ -893,7 +920,7 @@ class DocumentTextPipeline {
       });
     }
 
-    const extracted = await this.extractDocument({ buffer: download.buffer, format });
+    const extracted = await this.extractDocument({ buffer: download.buffer, format, allowOcr, ocrPageBudget });
     const normalized = normalizeDocumentPages(extracted.pageTexts);
     const chunks = buildChunks(normalized.text);
 
@@ -918,7 +945,7 @@ class DocumentTextPipeline {
     };
   }
 
-  async extractDocument({ buffer, format }) {
+  async extractDocument({ buffer, format, allowOcr = true, ocrPageBudget = null }) {
     if (format === 'txt') {
       return {
         pageTexts: [buffer.toString('utf8')],
@@ -952,10 +979,21 @@ class DocumentTextPipeline {
     }
 
     if (format === 'pdf') {
-      return this.extractPdf(buffer);
+      return this.extractPdf(buffer, { allowOcr, ocrPageBudget });
     }
 
     if (format === 'image/png' || format === 'image/jpeg' || format === 'image/webp') {
+      // An image is entirely OCR or nothing, so a deferral yields no text at all.
+      if (this.ocrProvider && !this.canSpendOcrPages(1, { allowOcr, ocrPageBudget })) {
+        return {
+          pageTexts: [''],
+          textSource: 'image_pending_ocr',
+          ocrUsed: false,
+          ocrPageNumbers: [],
+          pagesMissingText: [1],
+        };
+      }
+
       const ocrPages = await this.extractWithOcr([{
         pageNumber: 1,
         mimeType: format,
@@ -966,6 +1004,8 @@ class DocumentTextPipeline {
         pageTexts: ocrPages,
         textSource: 'image_ocr',
         ocrUsed: true,
+        ocrPageNumbers: [1],
+        pagesMissingText: [],
       };
     }
 
@@ -992,7 +1032,17 @@ class DocumentTextPipeline {
   // scanned exhibits, and a whole-document threshold gets those documents wrong in both
   // directions: it either OCRs 40 pages when 5 needed it, or — the older bug — sees enough text
   // from the typed pages to call the whole thing digital and silently returns the exhibits blank.
-  async extractPdf(buffer) {
+  // Whether this call is permitted to spend `pageCount` vision calls. A `false` here means
+  // "defer", not "fail" — the caller asked to be told the cost rather than charged it.
+  canSpendOcrPages(pageCount, { allowOcr = true, ocrPageBudget = null } = {}) {
+    if (allowOcr === false) {
+      return false;
+    }
+
+    return ocrPageBudget === null || pageCount <= ocrPageBudget;
+  }
+
+  async extractPdf(buffer, { allowOcr = true, ocrPageBudget = null } = {}) {
     const embeddedPages = await this.extractors.extractPdfTextPages(buffer);
     const pageNeedsOcr = embeddedPages.map(
       (pageText) => normalizePageText(pageText).replace(/\s/g, '').length < PDF_PAGE_TEXT_MIN_CHARS,
@@ -1031,8 +1081,20 @@ class DocumentTextPipeline {
       };
     }
 
-    // Budget and rasterize only the pages that actually need it.
+    // The configured per-document cap is a hard limit and still errors. The caller's remaining
+    // allowance is soft: over it, the document is deferred with its cost reported, so one large
+    // scan does not fail an entire matter search.
     this.ensureOcrPageBudget(ocrPageNumbers.length);
+
+    if (!this.canSpendOcrPages(ocrPageNumbers.length, { allowOcr, ocrPageBudget })) {
+      return {
+        pageTexts: embeddedPages,
+        textSource: everyPageNeedsOcr ? 'pdf_pending_ocr' : 'pdf_text',
+        ocrUsed: false,
+        ocrPageNumbers: [],
+        pagesMissingText: ocrPageNumbers,
+      };
+    }
 
     const pageImages = await this.extractors.rasterizePdfIntoPageImages(buffer, {
       pageNumbers: ocrPageNumbers,

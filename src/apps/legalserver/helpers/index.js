@@ -20,6 +20,7 @@ const {
   validateMaxChars,
   validatePage,
   validatePageSize,
+  validatePositiveInteger,
 } = require('./pagination');
 const { successEnvelope, toMcpTextResult } = require('./response');
 const { htmlToText, makePreview, truncateText } = require('./text');
@@ -52,4 +53,5 @@ module.exports = {
   validateMaxChars,
   validatePage,
   validatePageSize,
+  validatePositiveInteger,
 };
