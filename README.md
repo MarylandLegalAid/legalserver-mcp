@@ -96,11 +96,19 @@ OCR works by sending page images of scanned client documents to a cloud vision m
 | --- | --- | --- |
 | The page becoming a retrievable stored object (dashboard logs, API-side conversation state, evals) | `store: false` on every request | this server, unconditionally |
 | A third party seeing the page en route | Requests go directly to `api.openai.com`, never through a proxy or router | this server |
-| The page being retained at all, including for abuse monitoring | A **Zero Data Retention (ZDR)** agreement on your own OpenAI account | **you, the operator** |
+| The page being retained in abuse-monitoring logs | A **Zero Data Retention (ZDR)** agreement on your own OpenAI account — with one carve-out, below | **you, the operator** |
 
 The third row is the one that actually keeps scanned client documents out of a vendor's retention window, and **no setting in this repository can provide it**. `store: false` is not zero retention: it stops the request being kept as something anyone can pull back up, but on a standard account the payload is still retained for OpenAI's abuse-monitoring window. Only a ZDR agreement negotiated on your account changes that.
 
 If you are handling privileged or otherwise confidential client material, arrange ZDR (and, where applicable, a BAA) with OpenAI **before** you enable OCR — not after. If you cannot, leave `DOCUMENT_OCR_PROVIDER=none`; failing on scanned documents is the safer outcome.
+
+#### The carve-out ZDR does not close
+
+Image and file inputs are treated differently from text. Per OpenAI's [data controls documentation](https://developers.openai.com/api/docs/guides/your-data), every image submitted to the API is scanned for CSAM on submission, and if the classifier flags one, **that image is retained for manual human review even when Zero Data Retention, Modified Abuse Monitoring, or Eyes Off is enabled**. No agreement closes this path.
+
+For legal aid this deserves more than a footnote, because the false-positive surface is not hypothetical. Custody and guardianship filings, abuse and neglect records, CPS paperwork, pediatric medical records, and immigration files with photographs of children are ordinary legal aid documents. A scanned page from any of them is an image input like any other. If a classifier flags one, a privileged client document reaches a human reviewer outside your organization.
+
+There is no configuration that prevents this, and this repository cannot mitigate it. It is a reason to scope which documents get OCR'd rather than enabling it matter-wide by default, and it is worth raising with your own counsel before turning OCR on. Separately, if you operate outside the US, image input may additionally require approval for enhanced ZDR or enhanced Modified Abuse Monitoring — check before assuming your existing agreement covers it.
 
 This is also why OpenAI is the only OCR vendor this server will support. Earlier revisions carried `openrouter` and `vertex_gemini` providers; both have been removed. A router proxies page images to whichever model you name, which puts them outside an agreement scoped to a single vendor — and a one-word change in an `.env` file is too small a gap between a compliant deployment and a non-compliant one. Setting either value now fails at boot with a message saying so.
 
